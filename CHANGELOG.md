@@ -14,5 +14,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `list` and `cat` inspect the available fragments; local overrides in `.claude/fragments/` shadow the embedded bodies and render with `local:` provenance markers.
 - Directive arguments substitute `{{token}}` placeholders inside fragment bodies; source prose is never touched.
 - Embedded fragments: the six canonical markdown guides (`ask-before-assuming`, `ccx`, `code-review-response`, `parallelize`, `version-control`, `writing-plans`) and two parameterized shell fragments (`install-binary-pinned`, `install-binary-latest`).
+- Fleet CI: a composite Guides action (`yasyf/cc-guides@action-v1`) that checks artifacts with the exact version their banner records, a reusable re-render workflow with a banner-only diff gate, and a release fan-out that dispatches `cc-guides-render` to every `fleet.json` repo.
 
 [Unreleased]: https://github.com/yasyf/cc-guides/commits/main
