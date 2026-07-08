@@ -1,0 +1,100 @@
+name: Re-render guides
+
+# Reusable workflow: install the LATEST cc-guides, re-render every *.src.*
+# artifact, and commit the result — unless the diff is confined to banner lines
+# (a code-only cc-guides release), in which case skip: the skip certifies the
+# referenced content is identical across versions, so the old-version banner
+# still checks green under the Guides action.
+#
+# Called from each repo's guides.yml on repository_dispatch (cc-guides-render),
+# schedule, or workflow_dispatch. GITHUB_TOKEN pushes don't retrigger workflows,
+# so the re-render commit cannot loop; the in-workflow self-check below covers it.
+
+on:
+  workflow_call: {}
+
+permissions:
+  contents: write
+
+jobs:
+  re-render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install latest cc-guides
+        shell: bash
+        run: |
+          set -euo pipefail
+          os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+          arch="$(uname -m)"
+          case "$arch" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; esac
+          effective="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+            "https://github.com/yasyf/cc-guides/releases/latest")"
+          tag="${effective##*/tag/}"
+          case "$tag" in v[0-9]*) ;; *) echo "::error::could not resolve latest cc-guides release (got '$effective')"; exit 1 ;; esac
+          asset="cc-guides_${os}_${arch}"
+          base="https://github.com/yasyf/cc-guides/releases/download/$tag"
+          mkdir -p "$RUNNER_TEMP/cc-guides-bin"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/cc-guides-bin/cc-guides" "$base/$asset"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/checksums.txt" "$base/checksums.txt"
+          expected="$(awk -v a="$asset" '$2 == a {print $1}' "$RUNNER_TEMP/checksums.txt")"
+          actual="$(sha256sum "$RUNNER_TEMP/cc-guides-bin/cc-guides" | awk '{print $1}')"
+          if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
+            echo "::error::checksum mismatch for $asset at $tag"
+            exit 1
+          fi
+          chmod +x "$RUNNER_TEMP/cc-guides-bin/cc-guides"
+          echo "$RUNNER_TEMP/cc-guides-bin" >> "$GITHUB_PATH"
+          echo "CC_GUIDES_VERSION=${tag#v}" >> "$GITHUB_ENV"
+
+      - name: Render, diff-gate, commit
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          banner_only() {
+            # True when every changed content line in the diff is a banner line.
+            ! git diff -U0 -- . | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' \
+              | grep -vE 'cc-guides [^ ]+ src=[^ ]+ \| GENERATED' | grep -q .
+          }
+
+          pushed=0
+          landed=0
+          for attempt in 1 2 3; do
+            cc-guides render
+            if git diff --quiet -- .; then
+              echo "already current — nothing to commit"
+              landed=1
+              break
+            fi
+            if banner_only; then
+              echo "diff is banner-only (code-only cc-guides release) — skipping commit; old banner still checks green"
+              git checkout -- .
+              landed=1
+              break
+            fi
+            git add -u
+            git commit -m "chore: re-render guides (cc-guides ${CC_GUIDES_VERSION})"
+            if git push; then
+              pushed=1
+              landed=1
+              break
+            fi
+            echo "push rejected (attempt $attempt) — refetching"
+            git fetch origin
+            git reset --hard "origin/${GITHUB_REF_NAME}"
+          done
+          if [ "$landed" -eq 0 ]; then
+            echo "::error::could not land the re-render after 3 attempts"
+            exit 1
+          fi
+          echo "pushed=$pushed" >> "$GITHUB_OUTPUT"
+
+      - name: Self-check (only when a commit was pushed)
+        if: steps.commit.outputs.pushed == '1'
+        shell: bash
+        run: cc-guides check --diff
