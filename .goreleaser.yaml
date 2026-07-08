@@ -1,0 +1,105 @@
+# goreleaser v2 — the canonical base config (pure Go, CGO_ENABLED=0). Layer
+# recipes on top (zig CGO, build tags, universal binaries, embed-prebuild) per
+# reference/go-ci-and-release.md. Validate locally: goreleaser release --snapshot --clean
+version: 2
+
+project_name: cc-guides
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: cc-guides
+    main: ./cmd/cc-guides
+    binary: cc-guides
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/yasyf/cc-guides/internal/version.Version={{ .Version }}
+      - -X github.com/yasyf/cc-guides/internal/version.Commit={{ .Commit }}
+      - -X github.com/yasyf/cc-guides/internal/version.Date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  # Bare per-arch binaries named cc-guides_<os>_<arch> — the Guides action
+  # (action.yml) downloads these directly from the release and verifies them
+  # against checksums.txt:
+  #   https://github.com/yasyf/cc-guides/releases/download/v${VERSION}/cc-guides_${OS}_${ARCH}
+  - id: binary
+    ids:
+      - cc-guides
+    formats: [binary]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+  # A normal tar.gz archive for general use (and the Homebrew cask).
+  - id: archive
+    ids:
+      - cc-guides
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+# Sign + notarize the darwin binaries with our Apple Developer ID — but only when the
+# MACOS_* secrets are set, so repos without Apple creds still release (unsigned) unchanged.
+# goreleaser's built-in quill signer is pure Go and runs on the linux runner (no macOS runner).
+# REQUIRES a full-chain p12 (leaf + Developer ID intermediate + Apple Root CA): without the
+# root, quill emits an unsatisfiable `certificate root[…6.2.6…]` designated requirement that
+# macOS SIGKILLs at exec. Bare-binary only (no .app bundle). See reference/go-ci-and-release.md.
+notarize:
+  macos:
+    - enabled: '{{ if envOrDefault "MACOS_SIGN_P12" "" }}true{{ else }}false{{ end }}'
+      ids:
+        - cc-guides
+      sign:
+        certificate: "{{ .Env.MACOS_SIGN_P12 }}"
+        password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
+      notarize:
+        issuer_id: "{{ .Env.MACOS_NOTARY_ISSUER_ID }}"
+        key_id: "{{ .Env.MACOS_NOTARY_KEY_ID }}"
+        key: "{{ .Env.MACOS_NOTARY_KEY }}"
+        wait: true
+        timeout: 20m
+
+checksum:
+  name_template: checksums.txt
+
+# Default distribution: a native Homebrew cask published by goreleaser itself to the
+# shared tap (no render/publish step). A cask ships the prebuilt binary as-is. Switch to a
+# formula (native `brews:`, or a rendered `.rb` via the render-formula action) only when you
+# need `brew services`, a runtime `depends_on`, or conditional install — see
+# reference/go-ci-and-release.md § Formula recipe.
+homebrew_casks:
+  - name: cc-guides
+    # Use the tar.gz archive (not the bare binary) for the cask: two archives
+    # cover each OS/Arch, so the cask must pick one.
+    ids:
+      - archive
+    binaries:
+      - cc-guides
+    repository:
+      owner: yasyf
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://github.com/yasyf/cc-guides
+    description: Canonical agent guides as a shipped Go binary — render AGENTS.md, CLAUDE.md, and shell artifacts from embedded, versioned fragments
+    # Strip the quarantine attribute so the (notarized, or unsigned) binary runs on first launch.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/cc-guides"]
+          end
+
+release:
+  prerelease: auto
+  # Idempotent re-runs: overwrite same-named assets instead of erroring (HTTP 422). The shared
+  # release-go.yml retries `goreleaser release --clean` past flaky notarization, and a rare
+  # mid-publish failure would otherwise 422 on the retry's asset re-upload.
+  replace_existing_artifacts: true
+
+changelog:
+  use: github

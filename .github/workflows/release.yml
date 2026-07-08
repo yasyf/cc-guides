@@ -1,0 +1,40 @@
+name: Release
+
+# Every push to main auto-releases: release-go.yml@v1 tags v0.1.<run_number>, then
+# goreleaser builds (pure Go, quill-signed darwin binaries) and publishes the cask
+# plus bare per-OS/arch binary assets + checksums.txt (the Guides action downloads
+# those). github.run_number stays monotonic as long as this workflow file keeps its
+# path (.github/workflows/release.yml).
+#
+# The gate is tests ONLY — deliberately no `cc-guides check` self-check here: a
+# fragment edit would fail its own gate and deadlock the very release that fixes it.
+# cc-guides' own artifact freshness rides the fleet re-render loop like every other repo.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go test -race ./...
+
+  release:
+    needs: test
+    uses: yasyf/homebrew-tap/.github/workflows/release-go.yml@v1
+    secrets: inherit
+    with:
+      auto-tag: true
