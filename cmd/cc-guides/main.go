@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -18,10 +17,6 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if err := cli.NewRootCmd().ExecuteContext(ctx); err != nil {
-		// Minimal error handling: report on stderr and exit non-zero. As the CLI
-		// grows, map typed errors to exit codes here (see STYLEGUIDE.md § Error Handling).
-		fmt.Fprintln(os.Stderr, "cc-guides:", err)
-		os.Exit(1)
-	}
+	// cli.Execute owns the exit-code contract: 0 ok · 1 drift · 2 invalid input.
+	os.Exit(cli.Execute(ctx, os.Args[1:], os.Stdout, os.Stderr))
 }

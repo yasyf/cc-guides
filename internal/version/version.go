@@ -2,7 +2,10 @@
 // with -ldflags; a `go install`ed binary falls back to module build info.
 package version
 
-import "runtime/debug"
+import (
+	"runtime/debug"
+	"strings"
+)
 
 // Set at build time via -ldflags (see Taskfile.yml and .goreleaser.yaml), e.g.
 //
@@ -25,4 +28,12 @@ func String() string {
 		}
 	}
 	return Version
+}
+
+// Bare returns the ldflags-injected Version with any leading "v" stripped. This
+// is the token stamped into the cc-guides banner and printed by `--version`; it
+// reads Version directly (not String) so an unstamped build cleanly reports
+// "dev" — the banner contract's signal that the artifact is not release-pinned.
+func Bare() string {
+	return strings.TrimPrefix(Version, "v")
 }

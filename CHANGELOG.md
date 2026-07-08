@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Initial scaffolding.
+- Initial release: render canonical agent guides from embedded, versioned fragments.
+- `render` expands column-0 `{{> name}}` directives in `X.src.{md,sh}` sources to their sibling `X.{md,sh}` artifacts, stamping a GENERATED banner.
+- `check` re-renders in memory and byte-compares against disk, emitting `OK`/`STALE`/`MISSING` TSV rows (exit 1 on drift, 2 on invalid input).
+- `init` migrates a legacy stamped markdown artifact to a `.src.md` source, self-verifying the round-trip before writing.
+- `list` and `cat` inspect the available fragments; local overrides in `.claude/fragments/` shadow the embedded bodies and render with `local:` provenance markers.
+- Directive arguments substitute `{{token}}` placeholders inside fragment bodies; source prose is never touched.
+- Embedded fragments: the six canonical markdown guides (`ask-before-assuming`, `ccx`, `code-review-response`, `parallelize`, `version-control`, `writing-plans`) and two parameterized shell fragments (`install-binary-pinned`, `install-binary-latest`).
 
 [Unreleased]: https://github.com/yasyf/cc-guides/commits/main
