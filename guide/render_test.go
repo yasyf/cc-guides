@@ -183,7 +183,7 @@ func TestRenderGolden(t *testing.T) {
 	)
 	src := "# Head\n\nIntro {{VAR}} passes through.\n\n{{> alpha}}\n\nBridge.\n\n{{> param env=prod host=web1}}\n\nEnd.\n"
 	got := renderString(t, src, guide.KindMD, r)
-	final := guide.AddBanner(guide.KindMD, "1.2.3", "AGENTS.src.md", []byte(got))
+	final := guide.AddBanner(guide.KindMD, "1.2.3", "AGENTS.src.md", "cc-skills@abcdef012345", []byte(got))
 	checkGolden(t, "render_full.golden.md", final)
 }
 

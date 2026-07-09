@@ -1,14 +1,14 @@
-// Package legacy is init's migration machinery: it collapses stamped canonical
-// blocks in a handwritten markdown artifact into `{{> name}}` directives,
-// self-verifies the result renders back to the original, and (unless dry-run)
-// writes X.src.md plus a freshly-rendered X.md.
+// Package legacy is init's first stage: it collapses stamped canonical blocks in a
+// handwritten markdown artifact into `{{> name}}` directives and self-verifies the
+// synthesized v1 source re-renders to the original. init then feeds that source
+// through the shared migrate engine to emit the v3 layout shape. legacy writes
+// nothing itself.
 package legacy
 
 import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -20,10 +20,9 @@ import (
 var (
 	ErrNotMarkdown     = errors.New("init is markdown-only")
 	ErrAlreadyBannered = errors.New("already migrated: input carries a cc-guides banner")
-	ErrSourceExists    = errors.New("refusing to clobber an existing .src file")
 	ErrDrift           = errors.New("migration blocked: mismatched or unknown fragment blocks")
 	ErrCollision       = errors.New("a remaining literal line parses as a directive")
-	ErrSelfVerify      = errors.New("self-verify failed: the migrated source does not re-render to the original")
+	ErrSelfVerify      = errors.New("self-verify failed: the synthesized source does not re-render to the original")
 )
 
 // Status is a migration row status.
@@ -42,20 +41,18 @@ type Row struct {
 	Detail string
 }
 
-// Options configures a migration.
+// Options configures the stamp scan.
 type Options struct {
-	DryRun         bool
 	KeepMismatched bool
-	Version        string // banner version stamped into the re-rendered artifact
-	Resolver       guide.Resolver
+	Resolver       guide.Resolver // resolves stamped names (source-backed in v3)
 }
 
-// Result is a migration outcome.
+// Result is the synthesized v1 source plus the reconstruction the composition must
+// reproduce (the original file with stamp/end lines removed).
 type Result struct {
-	Rows       []Row
-	SourcePath string
-	Artifact   string
-	Wrote      bool
+	Rows           []Row
+	SourceBytes    []byte
+	Reconstruction []byte
 }
 
 var (
@@ -69,9 +66,12 @@ type item struct {
 	text      string // when literal
 }
 
-// Migrate runs init over a single markdown artifact.
-func Migrate(artifact string, opts Options) (Result, error) {
-	res := Result{Artifact: artifact}
+// ToV1Source scans a stamped markdown artifact and returns the synthesized v1
+// source plus the reconstruction (original minus stamp/end lines). It self-verifies
+// stage 1 — the source re-renders to the reconstruction modulo trailing whitespace
+// — but writes nothing; init hands the result to the migrate engine.
+func ToV1Source(artifact string, opts Options) (Result, error) {
+	var res Result
 
 	kind, err := guide.KindForPath(artifact)
 	if err != nil || kind != guide.KindMD {
@@ -84,12 +84,6 @@ func Migrate(artifact string, opts Options) (Result, error) {
 	if _, ok := guide.ParseBanner(guide.KindMD, raw); ok {
 		return res, fmt.Errorf("%w: %q", ErrAlreadyBannered, artifact)
 	}
-
-	res.SourcePath = guide.SourcePath(artifact)
-	if _, err := os.Stat(res.SourcePath); err == nil {
-		return res, fmt.Errorf("%w: %q", ErrSourceExists, res.SourcePath)
-	}
-
 	// CRLF is a hard error; guide.Parse rejects it too, but check early for a
 	// clear message before any scanning.
 	if strings.IndexByte(string(raw), '\r') >= 0 {
@@ -113,8 +107,8 @@ func Migrate(artifact string, opts Options) (Result, error) {
 
 	candidate := buildSource(items)
 
-	// Self-verify: the candidate must re-render to the original modulo the banner,
-	// the deleted stamp/end lines, and per-line trailing whitespace.
+	// Stage-1 self-verify: the candidate must re-render to the original modulo the
+	// deleted stamp/end lines and per-line trailing whitespace.
 	doc, err := guide.Parse(candidate, guide.KindMD)
 	if err != nil {
 		return res, err
@@ -128,25 +122,9 @@ func Migrate(artifact string, opts Options) (Result, error) {
 		return res, ErrSelfVerify
 	}
 
-	final := guide.AddBanner(guide.KindMD, opts.Version, filepath.Base(res.SourcePath), renderedBody)
-
 	res.Rows = append(res.Rows, Row{StatusVerified, artifact})
-	if opts.DryRun {
-		return res, nil
-	}
-
-	mode := os.FileMode(0o644)
-	if info, err := os.Stat(artifact); err == nil {
-		mode = info.Mode().Perm()
-	}
-	// The migrated source and artifact are world-readable by design.
-	if err := os.WriteFile(res.SourcePath, candidate, 0o644); err != nil { // #nosec G306 -- world-readable by design
-		return res, err
-	}
-	if err := os.WriteFile(artifact, final, mode); err != nil { // #nosec G306 -- preserves the artifact's existing mode
-		return res, err
-	}
-	res.Wrote = true
+	res.SourceBytes = candidate
+	res.Reconstruction = guide.EnsureSingleTrailingNewline(renderedBody)
 	return res, nil
 }
 

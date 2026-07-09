@@ -1,15 +1,16 @@
 name: Guides check
 description: >
-  Verify every cc-guides-rendered artifact (*.src.md → *.md, *.src.sh → *.sh) is
-  fresh. Installs the exact cc-guides version each artifact's banner records
-  (grouped, checksum-verified), so a new cc-guides release can never redden this
-  check. Requires the repo to be checked out first (actions/checkout).
+  Verify every cc-guides artifact is fresh — both v3 .claude/fragments/<target>/
+  layout dirs and transitional *.src.md / *.src.sh sources. Installs the exact
+  cc-guides version each artifact's banner records (grouped, checksum-verified), so
+  a new cc-guides release can never redden this check. Requires the repo to be
+  checked out first (actions/checkout).
 
 inputs:
   files:
     description: >
-      Optional whitespace-separated list of source files to check. Default:
-      every *.src.md / *.src.sh tracked by git.
+      Optional whitespace-separated list of check targets (layout dirs and/or
+      *.src.* sources). Default: every tracked layout.toml dir and *.src.* source.
     required: false
     default: ""
 
@@ -23,40 +24,63 @@ runs:
       run: |
         set -euo pipefail
 
-        # --- enumerate sources -------------------------------------------------
+        # --- enumerate units (dual: v3 layout dirs + v1 sources) ---------------
+        # Each unit is a check argument: a ".claude/fragments/<target>" layout dir
+        # or an "X.src.{md,sh}" source. Their artifacts are on disk already.
+        units=()
         if [ -n "${INPUT_FILES// /}" ]; then
           # shellcheck disable=SC2206
-          sources=($INPUT_FILES)
+          units=($INPUT_FILES)
         else
-          mapfile -t sources < <(git ls-files -- '*.src.md' '*.src.sh')
+          while IFS= read -r lt; do
+            [ -n "$lt" ] && units+=("${lt%/layout.toml}")
+          done < <(git ls-files -- '.claude/fragments/**/layout.toml')
+          while IFS= read -r src; do
+            [ -n "$src" ] && units+=("$src")
+          done < <(git ls-files -- '*.src.md' '*.src.sh')
         fi
-        if [ "${#sources[@]}" -eq 0 ]; then
-          echo "::error::no *.src.md / *.src.sh sources found — this repo is not migrated to cc-guides." \
-               " Run 'cc-guides init AGENTS.md' (see https://github.com/yasyf/cc-guides) or drop this action."
+        if [ "${#units[@]}" -eq 0 ]; then
+          echo "::error::no cc-guides artifacts found — this repo is not migrated to cc-guides." \
+               " Run 'cc-guides migrate' (see https://github.com/yasyf/cc-guides) or drop this action."
           exit 1
         fi
 
-        # --- read each artifact's banner version -------------------------------
-        # Banner core: cc-guides <version> src=<src-basename> | GENERATED ...
-        # anchored within the first two lines of the artifact.
+        # --- map each unit to its artifact + banner version --------------------
+        # v3 unit ".claude/fragments/<target>" -> artifact "<target>".
+        # v1 unit "X.src.<ext>"                -> artifact "X.<ext>".
+        # Banner core: cc-guides <version> src=<src> [fragments=<f>] | GENERATED
         declare -A by_version=()
-        for src in "${sources[@]}"; do
-          artifact="${src%.src.*}.${src##*.}"
+        for unit in "${units[@]}"; do
+          case "$unit" in
+            .claude/fragments/*) artifact="${unit#.claude/fragments/}" ;;
+            *.src.*)             artifact="${unit%.src.*}.${unit##*.}" ;;
+            *)
+              echo "::error::'$unit' is neither a .claude/fragments layout dir nor a *.src.* source"
+              exit 1
+              ;;
+          esac
           if [ ! -f "$artifact" ]; then
-            echo "::error file=$src::rendered artifact '$artifact' is missing — run 'cc-guides render' and commit both files."
+            echo "::error file=$unit::rendered artifact '$artifact' is missing — run 'cc-guides render' and commit."
             exit 1
           fi
-          version="$(head -n 2 "$artifact" \
-            | sed -nE 's/.*cc-guides ([^ ]+) src=[^ ]+ \| GENERATED.*/\1/p' | head -n 1)"
+          banner="$(head -n 2 "$artifact")"
+          version="$(printf '%s\n' "$banner" \
+            | sed -nE 's/.*cc-guides ([^ ]+) src=[^ ]+.*\| GENERATED.*/\1/p' | head -n 1)"
+          fragments="$(printf '%s\n' "$banner" \
+            | sed -nE 's/.*cc-guides [^ ]+ src=[^ ]+ fragments=([^ ]+) \| GENERATED.*/\1/p' | head -n 1)"
           if [ -z "$version" ]; then
-            echo "::error file=$artifact::no cc-guides banner in the first two lines — run 'cc-guides render' (or 'cc-guides init' for a legacy file) and commit."
+            echo "::error file=$artifact::no cc-guides banner in the first two lines — run 'cc-guides render' and commit."
             exit 1
           fi
           if [ "$version" = "dev" ]; then
             echo "::error file=$artifact::banner records a dev build — re-render with a released cc-guides and commit."
             exit 1
           fi
-          by_version["$version"]+="$src"$'\n'
+          if [ "$fragments" = "local" ]; then
+            echo "::error file=$artifact::banner records 'fragments=local' (a dev render off a local source) — re-render against the committed layout and commit."
+            exit 1
+          fi
+          by_version["$version"]+="$unit"$'\n'
         done
 
         # --- install each banner version and check its group -------------------
@@ -85,18 +109,21 @@ runs:
           fi
         done
         if [ "$failed" -ne 0 ]; then
-          echo "::error::stale rendered guides — run 'cc-guides render' locally and commit source + artifact together."
+          echo "::error::stale rendered guides — run 'cc-guides render' locally and commit the layout + artifact together."
           exit 1
         fi
 
         # --- non-blocking freshness notice --------------------------------------
+        # A newer cc-guides binary no longer forces a fleet refresh: content lives
+        # in cc-skills, and a code-only release re-renders to a banner-only diff
+        # that the re-render loop skips. This notice only flags a very old binary.
         latest="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
           "https://github.com/yasyf/cc-guides/releases/latest" || true)"
         latest="${latest##*/tag/v}"
         if [ -n "$latest" ]; then
           newest="$(printf '%s\n' "${!by_version[@]}" | sort -V | tail -n 1)"
           if [ "$newest" != "$latest" ] && [ "$(printf '%s\n%s\n' "$newest" "$latest" | sort -V | tail -n 1)" = "$latest" ]; then
-            echo "::notice::guides rendered with cc-guides $newest; latest is $latest — the fleet re-render will refresh this repo (or run 'cc-guides render' after 'brew upgrade cc-guides')."
+            echo "::notice::guides rendered with cc-guides $newest; latest is $latest — non-blocking (the fleet re-render refreshes on content changes, not binary releases)."
             {
               echo "### cc-guides freshness"
               echo "Rendered with **$newest**, latest release is **$latest**. Non-blocking."

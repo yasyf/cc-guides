@@ -1,4 +1,4 @@
-<!-- cc-guides 1.2.3 src=AGENTS.src.md | GENERATED — do not edit: change AGENTS.src.md and run 'cc-guides render'. Everything below is in force. -->
+<!-- cc-guides 1.2.3 src=AGENTS.src.md fragments=cc-skills@abcdef012345 | GENERATED — do not edit: edit AGENTS.src.md/ and run 'cc-guides render'. Everything below is in force. -->
 # Head
 
 Intro {{VAR}} passes through.

@@ -26,7 +26,13 @@ func NewDirResolver(dir, label string) *DirResolver {
 // generated artifact must never carry CR bytes.
 func (d *DirResolver) Resolve(name string, kind Kind) (Fragment, bool, error) {
 	fname := name + kind.Ext()
-	body, err := os.ReadFile(filepath.Join(d.dir, fname)) // #nosec G304 -- reads an override fragment from the configured dir
+	path := filepath.Join(d.dir, fname)
+	// A v3 artifact dir (e.g. ".claude/fragments/AGENTS.md/") can share a name with
+	// a would-be flat override file; a directory is a clean miss, not a read error.
+	if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
+		return Fragment{}, false, nil
+	}
+	body, err := os.ReadFile(path) // #nosec G304 -- reads an override fragment from the configured dir
 	if err != nil {
 		if os.IsNotExist(err) {
 			return Fragment{}, false, nil

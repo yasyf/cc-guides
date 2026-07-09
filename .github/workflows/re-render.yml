@@ -73,8 +73,11 @@ jobs:
 
           banner_only() {
             # True when every changed content line in the diff is a banner line.
+            # The pattern covers both v1 (`… src=X | GENERATED`) and v2
+            # (`… src=X fragments=Y | GENERATED`) banners, so a code-only cc-guides
+            # release (which only bumps the version token and pins) is a skip.
             ! git diff -U0 -- . | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' \
-              | grep -vE 'cc-guides [^ ]+ src=[^ ]+ \| GENERATED' | grep -q .
+              | grep -vE 'cc-guides [^ ]+ src=[^ ]+( fragments=[^ ]+)? \| GENERATED' | grep -q .
           }
 
           pushed=0
@@ -92,8 +95,10 @@ jobs:
               landed=1
               break
             fi
+            # Pins from a freshly stamped (added) banner line, for the commit message.
+            pins="$(git diff -- . | grep '^+' | sed -nE 's/.*fragments=([^ ]+) \| GENERATED.*/\1/p' | head -n 1)"
             git add -u
-            git commit -m "chore: re-render guides (cc-guides ${CC_GUIDES_VERSION})"
+            git commit -m "chore: re-render guides (cc-guides ${CC_GUIDES_VERSION}, fragments ${pins:-none})"
             if git push; then
               pushed=1
               landed=1

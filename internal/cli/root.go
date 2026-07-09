@@ -14,9 +14,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/yasyf/cc-guides/fragments"
 	"github.com/yasyf/cc-guides/guide"
 	"github.com/yasyf/cc-guides/internal/version"
+	"github.com/yasyf/cc-guides/layout"
 )
 
 // ExitError carries a specific process exit code out of a command. A nil Err
@@ -44,22 +44,26 @@ func silent(code int) *ExitError          { return &ExitError{Code: code} }
 func fout(w io.Writer, format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
 func foutln(w io.Writer, a ...any)              { _, _ = fmt.Fprintln(w, a...) }
 
-// NewRootCmd builds the root command and registers its subcommands.
-func NewRootCmd() *cobra.Command {
+// NewRootCmd builds the root command and registers its subcommands. ctx is
+// captured by the context-taking subcommands' RunE closures, so the request
+// context flows as a parameter from Execute all the way down.
+func NewRootCmd(ctx context.Context) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "cc-guides",
-		Short:         "Canonical agent guides as a shipped Go binary — render AGENTS.md, CLAUDE.md, and shell artifacts from embedded, versioned fragments",
+		Short:         "Compose AGENTS.md, CLAUDE.md, and shell artifacts from .claude/fragments layouts and shared, imported guides",
 		Version:       version.Bare(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
 	root.SetVersionTemplate("{{.Version}}\n")
 	root.AddCommand(
-		newRenderCmd(),
-		newCheckCmd(),
-		newInitCmd(),
+		newRenderCmd(ctx),
+		newCheckCmd(ctx),
+		newMigrateCmd(ctx),
+		newInitCmd(ctx),
+		newLintCmd(),
 		newListCmd(),
-		newCatCmd(),
+		newCatCmd(ctx),
 	)
 	return root
 }
@@ -67,7 +71,7 @@ func NewRootCmd() *cobra.Command {
 // Execute runs the CLI and returns the process exit code: 0 ok · 1 drift · 2
 // invalid input. Diagnostics go to stderr; machine output to stdout.
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	root := NewRootCmd()
+	root := NewRootCmd(ctx)
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
@@ -87,21 +91,15 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return 2
 }
 
-// buildChain wires the override+embedded resolver chain rooted at the repo root
-// of the current working directory.
-func buildChain(fragmentsDir string) guide.Resolver {
+// repoRoot resolves the repo root from cwd (nearest ancestor with .git), falling
+// back to cwd. All v3 artifact-dir paths are anchored here and stored
+// repo-relative (slash form), so the banner `src=` matches on any machine.
+func repoRoot() string {
 	cwd, err := os.Getwd()
 	if err != nil {
-		cwd = "."
+		return "."
 	}
-	dir := fragmentsDir
-	label := ".claude/fragments"
-	if dir == "" {
-		dir = filepath.Join(findRepoRoot(cwd), ".claude", "fragments")
-	} else {
-		label = filepath.ToSlash(dir)
-	}
-	return guide.NewChain(guide.NewDirResolver(dir, label), fragments.Resolver())
+	return findRepoRoot(cwd)
 }
 
 // findRepoRoot walks up from start to the nearest ancestor containing .git; it
@@ -120,101 +118,85 @@ func findRepoRoot(start string) string {
 	}
 }
 
-// collectSources returns the sources to operate on: the explicit args (validated
-// as X.src.{md,sh}) or, when none are given, a pure discovery walk from cwd.
-func collectSources(args []string) (explicit bool, sources []string, err error) {
-	if len(args) > 0 {
-		for _, a := range args {
-			if !guide.IsSource(a) {
-				return true, nil, fmt.Errorf("not a source file: %q (expected X.src.md or X.src.sh)", a)
-			}
+// parseSourceOverrides parses repeated `--source alias=spec` flags into a map. A
+// spec beginning `github:` pins by sha; any other value is a local directory read
+// in place (dev/E2E), which stamps `fragments=local`.
+func parseSourceOverrides(flags []string) (map[string]string, error) {
+	out := map[string]string{}
+	for _, f := range flags {
+		alias, spec, ok := strings.Cut(f, "=")
+		if !ok || alias == "" || spec == "" {
+			return nil, fmt.Errorf("--source must be alias=spec, got %q", f)
 		}
-		return true, args, nil
+		if !guide.ValidName(alias) {
+			return nil, fmt.Errorf("--source alias %q is invalid", alias)
+		}
+		out[alias] = spec
 	}
-	src, err := discoverSources()
-	return false, src, err
+	return out, nil
 }
 
-// targetCollisions maps each source whose render target is unsafe to the reason.
-// A target is unsafe when it is itself source-shaped (a source that would render
-// onto a source), when two sources share one target, or when a target is also
-// one of the selected sources. Detecting these before any write keeps a partial
-// render from clobbering a source file.
-func targetCollisions(sources []string) map[string]error {
-	bad := map[string]error{}
-	target := make(map[string]string, len(sources)) // source -> cleaned target
-	byTarget := map[string][]string{}               // cleaned target -> sources
-	srcSet := map[string]bool{}
-	for _, s := range sources {
-		srcSet[filepath.Clean(s)] = true
+// discoverArtifactDirs walks <repoRoot>/.claude/fragments explicitly (the default
+// walk skips dot-dirs, so .claude would be invisible) and returns every dir that
+// holds a layout.toml, repo-relative and slash-formed. An artifact dir is not
+// descended into: it must be flat, and its contents are validated separately.
+func discoverArtifactDirs(root string) ([]string, error) {
+	base := filepath.Join(root, filepath.FromSlash(guide.FragmentsRoot))
+	if _, err := os.Stat(base); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
 	}
-	for _, s := range sources {
-		a, err := guide.ArtifactPath(s)
+	var dirs []string
+	err := filepath.WalkDir(base, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			bad[s] = err
-			continue
+			return err
 		}
-		ca := filepath.Clean(a)
-		target[s] = ca
-		byTarget[ca] = append(byTarget[ca], s)
-	}
-	for _, s := range sources {
-		ca, ok := target[s]
-		if !ok {
-			continue // already flagged with an ArtifactPath error
+		if !d.IsDir() {
+			return nil
 		}
-		switch {
-		case guide.IsSource(ca):
-			bad[s] = fmt.Errorf("refusing to render %q: its target %q is itself a source file", s, ca)
-		case len(byTarget[ca]) > 1:
-			others := append([]string(nil), byTarget[ca]...)
-			sort.Strings(others)
-			bad[s] = fmt.Errorf("refusing to render %q: target %q is shared by %s", s, ca, strings.Join(others, ", "))
-		case srcSet[ca]:
-			bad[s] = fmt.Errorf("refusing to render %q: its target %q is also a selected source", s, ca)
+		if _, statErr := os.Stat(filepath.Join(path, "layout.toml")); statErr == nil {
+			rel, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				return relErr
+			}
+			dirs = append(dirs, filepath.ToSlash(rel))
+			return fs.SkipDir
 		}
-	}
-	return bad
-}
-
-// collisionError folds targetCollisions into one deterministic error, or nil
-// when every source has a safe, distinct target.
-func collisionError(sources []string) error {
-	bad := targetCollisions(sources)
-	if len(bad) == 0 {
 		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	keys := make([]string, 0, len(bad))
-	for k := range bad {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	msgs := make([]string, len(keys))
-	for i, k := range keys {
-		msgs[i] = bad[k].Error()
-	}
-	return errors.New(strings.Join(msgs, "; "))
+	sort.Strings(dirs)
+	return dirs, nil
 }
 
-// discoverSources walks from cwd, skipping dot-dirs and symlinked dirs, and
-// collects every *.src.md / *.src.sh, sorted.
-func discoverSources() ([]string, error) {
+// discoverSources walks from repoRoot, skipping dot-dirs and symlinked dirs, and
+// collects every *.src.md / *.src.sh (the transitional v1 sources), repo-relative
+// and sorted.
+func discoverSources(root string) ([]string, error) {
 	var out []string
-	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			if path != "." && strings.HasPrefix(d.Name(), ".") {
+			if path != root && strings.HasPrefix(d.Name(), ".") {
 				return fs.SkipDir
 			}
 			return nil
 		}
 		if d.Type()&fs.ModeSymlink != 0 {
-			return nil // WalkDir never descends symlinked dirs; skip symlink files too
+			return nil
 		}
 		if guide.IsSource(path) {
-			out = append(out, filepath.ToSlash(path))
+			rel, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				return relErr
+			}
+			out = append(out, filepath.ToSlash(rel))
 		}
 		return nil
 	})
@@ -225,8 +207,37 @@ func discoverSources() ([]string, error) {
 	return out, nil
 }
 
-// bannerVersion resolves the effective banner version, warning once on stderr
-// for a dev build.
+// collectUnits resolves the work items for render/check: the explicit args
+// (classified as v1 sources or v3 artifact dirs) or, with no args, a dual
+// discovery of both.
+func collectUnits(root string, args []string) (v3dirs, v1srcs []string, err error) {
+	if len(args) == 0 {
+		v3dirs, err = discoverArtifactDirs(root)
+		if err != nil {
+			return nil, nil, err
+		}
+		v1srcs, err = discoverSources(root)
+		return v3dirs, v1srcs, err
+	}
+	for _, a := range args {
+		switch {
+		case guide.IsSource(a):
+			v1srcs = append(v1srcs, filepath.ToSlash(a))
+		default:
+			rel := filepath.ToSlash(strings.TrimSuffix(a, "/"))
+			if _, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(rel), "layout.toml")); statErr != nil {
+				return nil, nil, fmt.Errorf("%q is neither a *.src.{md,sh} source nor an artifact dir (no layout.toml)", a)
+			}
+			v3dirs = append(v3dirs, rel)
+		}
+	}
+	sort.Strings(v3dirs)
+	sort.Strings(v1srcs)
+	return v3dirs, v1srcs, nil
+}
+
+// bannerVersion resolves the effective banner version, warning once on stderr for
+// a dev build.
 func bannerVersion(override string, stderr io.Writer) string {
 	v := override
 	if v == "" {
@@ -238,4 +249,23 @@ func bannerVersion(override string, stderr io.Writer) string {
 		foutln(stderr, "cc-guides: warning: stamping a 'dev' banner version; artifacts will not match a released build (pass --banner-version or build with -ldflags)")
 	}
 	return v
+}
+
+// unionSpecs merges every artifact dir's [sources.*] into one spec map so a single
+// resolver serves the whole run (resolve-once-per-process). A conflicting alias
+// (same name, different spec across dirs) is a hard error. --source overrides win.
+func unionSpecs(layouts map[string]*layout.Layout, overrides map[string]string) (map[string]string, error) {
+	specs := map[string]string{}
+	for dir, lay := range layouts {
+		for alias, spec := range lay.Sources {
+			if prev, ok := specs[alias]; ok && prev != spec {
+				return nil, fmt.Errorf("source alias %q maps to different specs across artifact dirs (%q vs %q, e.g. in %s)", alias, prev, spec, dir)
+			}
+			specs[alias] = spec
+		}
+	}
+	for alias, spec := range overrides {
+		specs[alias] = spec
+	}
+	return specs, nil
 }

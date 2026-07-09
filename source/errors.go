@@ -1,0 +1,17 @@
+package source
+
+import "errors"
+
+// Sentinel errors. All denote invalid input or an unreachable source (CLI exit 2).
+var (
+	// ErrBadSpec is a malformed source spec.
+	ErrBadSpec = errors.New("invalid source spec")
+	// ErrUnknownAlias is an import whose alias no source declares.
+	ErrUnknownAlias = errors.New("unknown source alias")
+	// ErrResolveRef is a failure to resolve a ref to a commit sha via git ls-remote.
+	ErrResolveRef = errors.New("could not resolve source ref")
+	// ErrFetch is a failure to fetch or extract a source tarball.
+	ErrFetch = errors.New("could not fetch source content")
+	// ErrOfflineMiss is a cache miss with no network reachability.
+	ErrOfflineMiss = errors.New("source content is not cached and could not be fetched")
+)

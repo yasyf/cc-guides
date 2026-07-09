@@ -47,6 +47,10 @@ var (
 	// expansion is one level only.
 	ErrNestedInclude = errors.New("nested include is not allowed (expansion is one level)")
 
+	// ErrShebangNotFirst is a composition piece other than the first that begins
+	// with `#!`. Only the first piece of a .sh artifact may carry a shebang.
+	ErrShebangNotFirst = errors.New("only the first piece of a shell artifact may begin with a shebang")
+
 	// ErrTokenNoArg is a `{{token}}` in a fragment body with no matching directive
 	// argument.
 	ErrTokenNoArg = errors.New("fragment token has no matching directive argument")

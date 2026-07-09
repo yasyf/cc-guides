@@ -8,8 +8,9 @@ import (
 )
 
 // The banner core regex is the stable machine contract; pin it verbatim so a
-// change to guide.BannerCoreRegex breaks this test loudly.
-const pinnedBannerCoreRegex = `cc-guides (?P<version>\S+) src=(?P<src>\S+) \| GENERATED\b`
+// change to guide.BannerCoreRegex breaks this test loudly. The optional
+// `fragments=` group is what makes ONE regex parse both v1 and v2 banners.
+const pinnedBannerCoreRegex = `cc-guides (?P<version>\S+) src=(?P<src>\S+)(?: fragments=(?P<fragments>\S+))? \| GENERATED\b`
 
 func TestBannerCoreRegexPinned(t *testing.T) {
 	if guide.BannerCoreRegex != pinnedBannerCoreRegex {
@@ -19,27 +20,26 @@ func TestBannerCoreRegexPinned(t *testing.T) {
 
 func TestBannerBuildParseRoundTrip(t *testing.T) {
 	cases := []struct {
-		kind    guide.Kind
-		version string
-		src     string
-		content string
+		kind      guide.Kind
+		version   string
+		src       string
+		fragments string
+		content   string
 	}{
-		{guide.KindMD, "1.2.3", "AGENTS.src.md", "# body\ncontent\n"},
-		{guide.KindMD, "dev", "CLAUDE.src.md", "@AGENTS.md\n"},
-		{guide.KindSH, "0.1.9", "install-binary.src.sh", "echo hi\n"},
-		{guide.KindSH, "0.1.9", "install-binary.src.sh", "#!/bin/sh\necho hi\n"},
+		{guide.KindMD, "1.2.3", ".claude/fragments/AGENTS.md", "cc-skills@abcdef012345", "# body\ncontent\n"},
+		{guide.KindMD, "dev", ".claude/fragments/CLAUDE.md", "none", "@AGENTS.md\n"},
+		{guide.KindMD, "0.2.0", ".claude/fragments/AGENTS.md", "cc-skills@abcdef012345,team@0123456789ab", "x\n"},
+		{guide.KindSH, "0.1.9", ".claude/fragments/plugin/scripts/install.sh", "local", "echo hi\n"},
+		{guide.KindSH, "0.1.9", ".claude/fragments/plugin/scripts/install.sh", "cc-skills@abcdef012345", "#!/bin/sh\necho hi\n"},
 	}
 	for _, tc := range cases {
-		out := guide.AddBanner(tc.kind, tc.version, tc.src, []byte(tc.content))
+		out := guide.AddBanner(tc.kind, tc.version, tc.src, tc.fragments, []byte(tc.content))
 		info, ok := guide.ParseBanner(tc.kind, out)
 		if !ok {
 			t.Fatalf("ParseBanner failed for %q", out)
 		}
-		if info.Version != tc.version {
-			t.Errorf("version = %q, want %q", info.Version, tc.version)
-		}
-		if info.Src != tc.src {
-			t.Errorf("src = %q, want %q", info.Src, tc.src)
+		if info.Version != tc.version || info.Src != tc.src || info.Fragments != tc.fragments {
+			t.Errorf("parsed %+v, want version=%q src=%q fragments=%q", info, tc.version, tc.src, tc.fragments)
 		}
 		if !strings.HasSuffix(string(out), "\n") || strings.HasSuffix(string(out), "\n\n") {
 			t.Errorf("banner output must end in exactly one newline: %q", out)
@@ -47,8 +47,21 @@ func TestBannerBuildParseRoundTrip(t *testing.T) {
 	}
 }
 
+// A deployed v1 banner (no fragments= field) must still parse, with an empty
+// Fragments — the whole point of the optional group.
+func TestParseV1Banner(t *testing.T) {
+	v1 := "<!-- cc-guides 0.1.7 src=AGENTS.src.md | GENERATED — do not edit -->\n# body\n"
+	info, ok := guide.ParseBanner(guide.KindMD, []byte(v1))
+	if !ok {
+		t.Fatal("v1 banner must parse")
+	}
+	if info.Version != "0.1.7" || info.Src != "AGENTS.src.md" || info.Fragments != "" {
+		t.Fatalf("v1 parse = %+v", info)
+	}
+}
+
 func TestBannerShebangPlacement(t *testing.T) {
-	out := string(guide.AddBanner(guide.KindSH, "1.0.0", "s.src.sh", []byte("#!/bin/sh\nset -e\n")))
+	out := string(guide.AddBanner(guide.KindSH, "1.0.0", "s.sh", "none", []byte("#!/bin/sh\nset -e\n")))
 	lines := strings.Split(out, "\n")
 	if lines[0] != "#!/bin/sh" {
 		t.Fatalf("line 1 = %q, want shebang", lines[0])
@@ -59,16 +72,40 @@ func TestBannerShebangPlacement(t *testing.T) {
 	if lines[2] != "set -e" {
 		t.Fatalf("line 3 = %q, want set -e", lines[2])
 	}
-
-	// Without a shebang the banner is line 1.
-	out2 := string(guide.AddBanner(guide.KindSH, "1.0.0", "s.src.sh", []byte("set -e\n")))
+	out2 := string(guide.AddBanner(guide.KindSH, "1.0.0", "s.sh", "none", []byte("set -e\n")))
 	if !strings.HasPrefix(out2, "# cc-guides ") {
 		t.Fatalf("non-shebang sh must start with banner: %q", out2)
 	}
 }
 
+// StripBanner is the exact inverse of AddBanner (round-trip), including the
+// shebang-preserving shell case.
+func TestStripBannerRoundTrip(t *testing.T) {
+	cases := []struct {
+		kind guide.Kind
+		body string
+	}{
+		{guide.KindMD, "# head\n\nbody\n"},
+		{guide.KindSH, "echo hi\n"},
+		{guide.KindSH, "#!/bin/sh\nset -e\necho hi\n"},
+	}
+	for _, tc := range cases {
+		final := guide.AddBanner(tc.kind, "1.0.0", "x", "none", []byte(tc.body))
+		got, ok := guide.StripBanner(tc.kind, final)
+		if !ok {
+			t.Fatalf("StripBanner failed for %q", final)
+		}
+		if string(got) != tc.body {
+			t.Fatalf("round-trip mismatch:\n got %q\nwant %q", got, tc.body)
+		}
+	}
+	if _, ok := guide.StripBanner(guide.KindMD, []byte("no banner here\n")); ok {
+		t.Fatal("StripBanner must report false on a bannerless file")
+	}
+}
+
 func TestParseBannerKindPosition(t *testing.T) {
-	const core = "cc-guides 1.0 src=x | GENERATED"
+	const core = "cc-guides 1.0 src=x fragments=none | GENERATED"
 	mdBanner := "<!-- " + core + " -->"
 	shBanner := "# " + core
 	cases := []struct {
@@ -78,14 +115,10 @@ func TestParseBannerKindPosition(t *testing.T) {
 		want    bool
 	}{
 		{"md banner on line 1", guide.KindMD, mdBanner + "\nbody\n", true},
-		// A handwritten md file whose line 2 coincidentally matches the banner
-		// regex must NOT be treated as generated.
 		{"md prose line 1, banner line 2", guide.KindMD, "handwritten prose\n" + mdBanner + "\n", false},
 		{"md banner on line 3", guide.KindMD, "one\ntwo\n" + mdBanner + "\n", false},
 		{"sh banner on line 1", guide.KindSH, shBanner + "\nset -e\n", true},
-		// (b) shebang line 1 + banner line 2 is where AddBanner puts it.
 		{"sh shebang line 1, banner line 2", guide.KindSH, "#!/bin/sh\n" + shBanner + "\nset -e\n", true},
-		// (c) non-shebang line 1 + banner line 2 is not a generated placement.
 		{"sh non-shebang line 1, banner line 2", guide.KindSH, "echo hi\n" + shBanner + "\n", false},
 		{"sh banner on line 3 with shebang", guide.KindSH, "#!/bin/sh\nset -e\n" + shBanner + "\n", false},
 	}
@@ -98,9 +131,32 @@ func TestParseBannerKindPosition(t *testing.T) {
 	}
 }
 
+// ParseBanner is kind-AWARE about the comment wrapper: a banner whose wrapper does
+// not match the artifact kind is NOT recognized, so render/check never treats a
+// wrong-kind file as a clobberable generated artifact. This deliberately supersedes
+// v1's kind-blind core matching (clobber-safety over recognition; AddBanner always
+// writes the matching wrapper, so no deployed artifact regresses).
+func TestParseBannerKindAwareCommentStyle(t *testing.T) {
+	const core = "cc-guides 0.1.7 src=AGENTS.src.md | GENERATED"
+	// Wrong-kind wrappers are rejected in BOTH directions.
+	if _, ok := guide.ParseBanner(guide.KindSH, []byte("<!-- "+core+" -->\nset -e\n")); ok {
+		t.Fatal("md-wrapped banner must NOT parse under KindSH")
+	}
+	if _, ok := guide.ParseBanner(guide.KindMD, []byte("# "+core+"\nbody\n")); ok {
+		t.Fatal("sh-wrapped banner must NOT parse under KindMD")
+	}
+	// Matching wrappers still parse.
+	if _, ok := guide.ParseBanner(guide.KindMD, []byte("<!-- "+core+" -->\nbody\n")); !ok {
+		t.Fatal("md-wrapped banner must parse under KindMD")
+	}
+	if _, ok := guide.ParseBanner(guide.KindSH, []byte("# "+core+"\nset -e\n")); !ok {
+		t.Fatal("sh-wrapped banner must parse under KindSH")
+	}
+}
+
 func TestBannerCoreExact(t *testing.T) {
-	got := guide.BannerCore("1.2.3", "AGENTS.src.md")
-	want := "cc-guides 1.2.3 src=AGENTS.src.md | GENERATED — do not edit: change AGENTS.src.md and run 'cc-guides render'. Everything below is in force."
+	got := guide.BannerCore("1.2.3", ".claude/fragments/AGENTS.md", "cc-skills@abcdef012345")
+	want := "cc-guides 1.2.3 src=.claude/fragments/AGENTS.md fragments=cc-skills@abcdef012345 | GENERATED — do not edit: edit .claude/fragments/AGENTS.md/ and run 'cc-guides render'. Everything below is in force."
 	if got != want {
 		t.Fatalf("core = %q\nwant %q", got, want)
 	}
