@@ -53,14 +53,11 @@ func TestParseRejectsCRLF(t *testing.T) {
 	}
 }
 
-func TestBakedDefaultInjection(t *testing.T) {
-	// No [sources] table: the cc-skills default is injected so imports resolve.
-	lay, err := layout.Parse([]byte("fragments = [\"cc-skills:ccx\"]\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if lay.Sources["cc-skills"] != layout.DefaultSourceSpec {
-		t.Fatalf("baked default not injected: %v", lay.Sources)
+func TestNoBakedDefault(t *testing.T) {
+	// There is no baked-in default: importing an alias with no [sources] table is
+	// an undeclared-alias error, never a silent injection.
+	if _, err := layout.Parse([]byte("fragments = [\"cc-skills:ccx\"]\n")); !errors.Is(err, layout.ErrUndeclaredAlias) {
+		t.Fatalf("err = %v, want ErrUndeclaredAlias (no baked default)", err)
 	}
 }
 
@@ -109,9 +106,9 @@ func TestEncodeRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded := layout.Encode(lay)
-	// The baked default source is omitted from the encoding.
-	if got := string(encoded); containsStr(got, "[sources.cc-skills]") {
-		t.Fatalf("baked-default source must be omitted:\n%s", got)
+	// Every declared source is emitted — there is no baked default to omit.
+	if got := string(encoded); !containsStr(got, "[sources.cc-skills]") || !containsStr(got, "github:yasyf/cc-skills//guides@main") {
+		t.Fatalf("declared source must be emitted:\n%s", got)
 	}
 	back, err := layout.Parse(encoded)
 	if err != nil {

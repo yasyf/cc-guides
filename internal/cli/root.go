@@ -251,6 +251,29 @@ func bannerVersion(override string, stderr io.Writer) string {
 	return v
 }
 
+// discoveredSpecs unions the [sources.*] of every artifact dir in the repo with
+// --source overrides, so an inspection command (cat) resolves an alias exactly as
+// render would. A malformed layout.toml is a hard error.
+func discoveredSpecs(root string, overrides map[string]string) (map[string]string, error) {
+	dirs, err := discoverArtifactDirs(root)
+	if err != nil {
+		return nil, err
+	}
+	layouts := map[string]*layout.Layout{}
+	for _, dir := range dirs {
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(dir), "layout.toml")) // #nosec G304 -- reads the layout.toml of a discovered artifact dir
+		if err != nil {
+			return nil, err
+		}
+		lay, err := layout.Parse(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", dir, err)
+		}
+		layouts[dir] = lay
+	}
+	return unionSpecs(layouts, overrides)
+}
+
 // unionSpecs merges every artifact dir's [sources.*] into one spec map so a single
 // resolver serves the whole run (resolve-once-per-process). A conflicting alias
 // (same name, different spec across dirs) is a hard error. --source overrides win.

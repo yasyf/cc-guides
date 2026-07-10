@@ -14,7 +14,6 @@ import (
 
 	"github.com/yasyf/cc-guides/guide"
 	"github.com/yasyf/cc-guides/internal/migrate"
-	"github.com/yasyf/cc-guides/layout"
 	"github.com/yasyf/cc-guides/source"
 )
 
@@ -73,7 +72,7 @@ func runMigrate(ctx context.Context, cmd *cobra.Command, args []string, o migrat
 		return nil
 	}
 
-	specs := map[string]string{layout.DefaultAlias: layout.DefaultSourceSpec}
+	specs := map[string]string{migrate.CCSkillsAlias: migrate.CCSkillsSpec}
 	for a, s := range overrides {
 		specs[a] = s
 	}

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/yasyf/cc-guides/guide"
-	"github.com/yasyf/cc-guides/layout"
+	"github.com/yasyf/cc-guides/internal/migrate"
 	"github.com/yasyf/cc-guides/source"
 )
 
@@ -42,7 +42,7 @@ func (a srcAdapter) Resolve(name string, kind guide.Kind) (guide.Fragment, bool,
 // cc-skills default plus any --source overrides, with pinned shas (check) or fresh
 // resolution (render).
 func newV1Resolver(overrides, pinned map[string]string) (*source.Resolver, error) {
-	specs := map[string]string{layout.DefaultAlias: layout.DefaultSourceSpec}
+	specs := map[string]string{migrate.CCSkillsAlias: migrate.CCSkillsSpec}
 	for alias, spec := range overrides {
 		specs[alias] = spec
 	}
@@ -62,12 +62,12 @@ func v1Chain(ctx context.Context, root string, doc *guide.Doc, kind guide.Kind, 
 		if _, done := remote[key]; done {
 			continue
 		}
-		body, found, err := resolver.Resolve(ctx, layout.DefaultAlias, n.Include.Name, kind)
+		body, found, err := resolver.Resolve(ctx, migrate.CCSkillsAlias, n.Include.Name, kind)
 		if err != nil {
 			return nil, err
 		}
 		if found {
-			remote[key] = guide.Fragment{Name: n.Include.Name, Kind: kind, Body: body, Origin: layout.DefaultAlias + ":" + n.Include.Name}
+			remote[key] = guide.Fragment{Name: n.Include.Name, Kind: kind, Body: body, Origin: migrate.CCSkillsAlias + ":" + n.Include.Name}
 		}
 	}
 	overrideDir := filepath.Join(root, filepath.FromSlash(guide.FragmentsRoot))

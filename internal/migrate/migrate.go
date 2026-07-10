@@ -19,6 +19,13 @@ import (
 	"github.com/yasyf/cc-guides/source"
 )
 
+// CCSkillsAlias and CCSkillsSpec are the manifest-form pack address every
+// migrated or init'd layout declares for its cc-skills imports.
+const (
+	CCSkillsAlias = "cc-skills"
+	CCSkillsSpec  = "github:yasyf/cc-skills@main"
+)
+
 // atxHeadingRe matches an ATX markdown heading, capturing its text.
 var atxHeadingRe = regexp.MustCompile(`^#{1,6}\s+(.+?)\s*#*\s*$`)
 
@@ -62,7 +69,7 @@ func Segments(doc *guide.Doc) []Segment {
 
 // includeToEntry maps a v1 `{{> name k=v}}` directive to a cc-skills import entry.
 func includeToEntry(inc *guide.Include) *layout.Entry {
-	e := &layout.Entry{Alias: layout.DefaultAlias, Name: inc.Name}
+	e := &layout.Entry{Alias: CCSkillsAlias, Name: inc.Name}
 	if len(inc.Args) > 0 {
 		e.Args = map[string]string{}
 		for k, v := range inc.Args {
@@ -103,7 +110,7 @@ func Build(ctx context.Context, in Input) (Output, error) {
 		return Output{}, err
 	}
 	lay := &layout.Layout{
-		Sources: map[string]string{layout.DefaultAlias: layout.DefaultSourceSpec},
+		Sources: map[string]string{CCSkillsAlias: CCSkillsSpec},
 		Entries: entries,
 	}
 

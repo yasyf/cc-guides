@@ -16,19 +16,23 @@ const (
 	KindMD Kind = iota
 	// KindSH is a POSIX shell artifact (`# …` comments).
 	KindSH
+	// KindJSON is a JSON artifact (deep-merged, no comment marker).
+	KindJSON
 )
 
 // AllKinds enumerates every supported kind; used to probe the alternate kind when
 // building a kind-mismatch diagnostic.
-var AllKinds = []Kind{KindMD, KindSH}
+var AllKinds = []Kind{KindMD, KindSH, KindJSON}
 
-// String returns the short name used in TSV output and diagnostics.
+// String returns the short name used in TSV output, the kind subdir, and diagnostics.
 func (k Kind) String() string {
 	switch k {
 	case KindMD:
 		return "md"
 	case KindSH:
 		return "sh"
+	case KindJSON:
+		return "json"
 	default:
 		return "unknown"
 	}
@@ -41,6 +45,8 @@ func (k Kind) Ext() string {
 		return ".md"
 	case KindSH:
 		return ".sh"
+	case KindJSON:
+		return ".json"
 	default:
 		return ""
 	}
@@ -53,8 +59,10 @@ func KindFromExt(ext string) (Kind, error) {
 		return KindMD, nil
 	case ".sh":
 		return KindSH, nil
+	case ".json":
+		return KindJSON, nil
 	default:
-		return 0, fmt.Errorf("%w: %q (supported: .md, .sh)", ErrUnknownExt, ext)
+		return 0, fmt.Errorf("%w: %q (supported: .md, .sh, .json)", ErrUnknownExt, ext)
 	}
 }
 

@@ -14,4 +14,11 @@ var (
 	ErrFetch = errors.New("could not fetch source content")
 	// ErrOfflineMiss is a cache miss with no network reachability.
 	ErrOfflineMiss = errors.New("source content is not cached and could not be fetched")
+	// ErrBadManifest is a malformed or invalid cc-guides.toml pack manifest.
+	ErrBadManifest = errors.New("invalid cc-guides.toml manifest")
+	// ErrNoManifest is a manifest-form spec whose target repo carries no
+	// cc-guides.toml (neither .claude/ nor root).
+	ErrNoManifest = errors.New("no cc-guides.toml manifest in source repo")
+	// ErrManifestGuides is a manifest whose guides dir is missing in the tree.
+	ErrManifestGuides = errors.New("manifest guides dir not found in source repo")
 )

@@ -20,11 +20,12 @@ var lowerTokenRe = regexp.MustCompile(`\{\{[a-z][a-z0-9-]*\}\}`)
 func newLintCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "lint <dir>",
-		Short: "Check a shared-fragments dir for purity (LF, single trailing newline, kind, sh shebang)",
+		Short: "Check a shared-fragments dir for purity (LF, single trailing newline, kind, sh shebang, json object)",
 		Long: "Verify every fragment under <dir> (e.g. a content repo's guides/) is pure:\n" +
 			"LF-only, exactly one trailing newline, non-empty, an extension matching its\n" +
-			"kind subdir, markdown token-free, and shell fragments carrying a shebang and\n" +
-			"no leftover mustache markers. Exit 1 on any violation.",
+			"kind subdir, markdown token-free, shell fragments carrying a shebang and no\n" +
+			"leftover mustache markers, and json fragments a well-formed object (tokens\n" +
+			"allowed). Exit 1 on any violation.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runLint(cmd, args[0])
@@ -107,6 +108,10 @@ func lintFile(root, path string) []string {
 		}
 		if bytes.Contains(body, []byte("{{#")) || bytes.Contains(body, []byte("{{/")) {
 			add("leftover mustache block markers ({{# / {{/)")
+		}
+	case guide.KindJSON:
+		if err := guide.LintJSON(body); err != nil {
+			add(err.Error())
 		}
 	}
 	return vs

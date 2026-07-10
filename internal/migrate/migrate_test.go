@@ -126,7 +126,7 @@ func TestBuildRoundTrip(t *testing.T) {
 		t.Fatalf("missing part-1.fragment.md: %v", keys(out.FragmentFiles))
 	}
 	lt := string(out.LayoutTOML)
-	for _, want := range []string{`"head"`, `"cc-skills:ccx"`, `"part-1"`} {
+	for _, want := range []string{`"head"`, `"cc-skills:ccx"`, `"part-1"`, "[sources.cc-skills]", `source = "github:yasyf/cc-skills@main"`} {
 		if !strings.Contains(lt, want) {
 			t.Errorf("layout.toml missing %s:\n%s", want, lt)
 		}

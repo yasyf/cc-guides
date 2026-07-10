@@ -61,7 +61,13 @@ var (
 	// ErrUnknownExt is an unsupported artifact/fragment extension.
 	ErrUnknownExt = errors.New("unsupported extension")
 
-	// ErrBannerlessOverwrite is a render refusing to clobber a handwritten file
-	// that carries no cc-guides banner.
-	ErrBannerlessOverwrite = errors.New("refusing to overwrite a file without a cc-guides banner")
+	// ErrHandwrittenOverwrite is a render refusing to clobber a handwritten file
+	// cc-guides does not manage (no marker, no legacy banner, not in the lock).
+	ErrHandwrittenOverwrite = errors.New("refusing to overwrite a handwritten file cc-guides does not manage")
+
+	// ErrJSONParse is a JSON fragment that is not well-formed or carries trailing data.
+	ErrJSONParse = errors.New("invalid JSON fragment")
+
+	// ErrJSONNotObject is a JSON fragment whose root value is not an object.
+	ErrJSONNotObject = errors.New("JSON fragment root must be an object")
 )

@@ -54,16 +54,28 @@ type Resolver struct {
 	fetcher   Fetcher
 	cacheRoot string
 
-	mu      sync.Mutex
-	sources map[string]*resolved // alias -> resolved source (memoized)
-	used    map[string]string    // alias -> recorded pin
+	mu       sync.Mutex
+	sources  map[string]*resolved // alias -> resolved source (memoized)
+	used     map[string]string    // alias -> recorded sha12 pin (banner)
+	usedFull map[string]string    // alias -> recorded full sha / LocalPin (lock)
 }
 
 // resolved is a memoized per-alias source: either a pinned github tree extracted
-// under dir, or a local directory read in place.
+// under dir, or a local directory read in place. sha is the full 40-char commit
+// sha for a github source and "" for a local one.
 type resolved struct {
 	dir string
 	pin string
+	sha string
+}
+
+// fullPin returns the lock-recorded pin: the full sha for a github source, or
+// LocalPin (carried in pin) for a local one.
+func (rs *resolved) fullPin() string {
+	if rs.sha == "" {
+		return rs.pin
+	}
+	return rs.sha
 }
 
 // New builds a Resolver. An empty CacheRoot defaults to
@@ -88,6 +100,7 @@ func New(opts Options) (*Resolver, error) {
 		cacheRoot: root,
 		sources:   map[string]*resolved{},
 		used:      map[string]string{},
+		usedFull:  map[string]string{},
 	}, nil
 }
 
@@ -99,6 +112,7 @@ func (r *Resolver) Resolve(ctx context.Context, alias, name string, kind guide.K
 	}
 	r.mu.Lock()
 	r.used[alias] = src.pin
+	r.usedFull[alias] = src.fullPin()
 	r.mu.Unlock()
 
 	fname := filepath.Join(src.dir, kind.String(), name+kind.Ext())
@@ -120,6 +134,16 @@ func (r *Resolver) Pin(alias string) (string, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	pin, ok := r.used[alias]
+	return pin, ok
+}
+
+// FullPin returns the recorded full 40-char commit sha for a resolved alias (or
+// LocalPin for a local source), for the lock file. Pin keeps returning sha12 for
+// origin labels.
+func (r *Resolver) FullPin(alias string) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	pin, ok := r.usedFull[alias]
 	return pin, ok
 }
 
@@ -154,13 +178,35 @@ func (r *Resolver) source(ctx context.Context, alias string) (*resolved, error) 
 		if err != nil {
 			return nil, err
 		}
-		res = &resolved{dir: dir, pin: sha12(sha)}
+		if sp.Manifest {
+			dir, err = r.manifestGuidesDir(dir, sp)
+			if err != nil {
+				return nil, err
+			}
+		}
+		res = &resolved{dir: dir, pin: sha12(sha), sha: sha}
 	}
 
 	r.mu.Lock()
 	r.sources[alias] = res
 	r.mu.Unlock()
 	return res, nil
+}
+
+// manifestGuidesDir resolves a manifest-form spec's extracted full tree to its
+// guides dir: load the repo's cc-guides.toml and point at manifest.Guides, which
+// must exist and be a directory.
+func (r *Resolver) manifestGuidesDir(treeDir string, sp Spec) (string, error) {
+	man, err := LoadManifestFrom(treeDir)
+	if err != nil {
+		return "", fmt.Errorf("%w (source %s): %w", ErrBadManifest, sp.Raw, err)
+	}
+	guidesDir := filepath.Join(treeDir, filepath.FromSlash(man.Guides))
+	st, err := os.Stat(guidesDir)
+	if err != nil || !st.IsDir() {
+		return "", fmt.Errorf("%w (source %s): manifest guides dir %q is missing", ErrManifestGuides, sp.Raw, man.Guides)
+	}
+	return guidesDir, nil
 }
 
 // resolveSha picks the sha for an alias: a caller-pinned sha (check mode) or a
@@ -177,7 +223,14 @@ func (r *Resolver) resolveSha(ctx context.Context, alias string, sp Spec) (strin
 	if sha, ok := sp.verbatimSha(); ok {
 		return sha, nil
 	}
-	return r.fetcher.LsRemote(ctx, sp.Owner, sp.Repo, sp.Ref)
+	sha, err := r.fetcher.LsRemote(ctx, sp.Owner, sp.Repo, sp.Ref)
+	if err != nil && hexRefRe.MatchString(sp.Ref) {
+		// A 7–39-char hex ref that fails ls-remote is almost certainly an
+		// abbreviated commit sha (ls-remote resolves only named refs), so point at
+		// the fix rather than leaving a bare "no matching ref".
+		return "", fmt.Errorf("%w — use the full 40-char commit sha, not an abbreviation", err)
+	}
+	return sha, err
 }
 
 // ensureExtracted returns the cache dir for (spec, sha), fetching and extracting
@@ -187,6 +240,18 @@ func (r *Resolver) ensureExtracted(ctx context.Context, sp Spec, sha string) (st
 	dir := r.cacheDir(sp, sha)
 	if st, err := os.Stat(dir); err == nil && st.IsDir() {
 		return dir, nil
+	}
+	// A sha off a legacy banner may be abbreviated (12-char) while the cache keys on
+	// the full sha, so match a cached commit dir by prefix; an ambiguous prefix is
+	// fatal, and no match falls through to a cold fetch under the given sha.
+	if len(sha) < 40 {
+		hit, err := r.cachePrefixLookup(sp, sha)
+		if err != nil {
+			return "", err
+		}
+		if hit != "" {
+			return hit, nil
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(dir), 0o750); err != nil {
 		return "", fmt.Errorf("%w: %w", ErrFetch, err)
@@ -216,11 +281,56 @@ func (r *Resolver) ensureExtracted(ctx context.Context, sp Spec, sha string) (st
 	return dir, nil
 }
 
-// cacheDir keys the cache on (owner, repo, sha12, sanitized-subpath) under the
-// user cache dir. The subpath is a cache dimension because two specs can pin the
-// same commit but import different subtrees.
+// cacheDir keys the cache on (owner, repo, full-sha, subpath-segment) under the
+// user cache dir. Keying on the full 40-char commit (not the sha12 display form)
+// keeps two commits sharing a 12-char prefix from colliding and lets a lock-pinned
+// resolution reuse the cache the fresh resolution filled. The subpath is a cache
+// dimension because two specs can pin the same commit but import different
+// subtrees; a manifest spec extracts the full tree and uses the distinct
+// "%manifest" sentinel so it never collides with an explicit empty-path ("%root").
 func (r *Resolver) cacheDir(sp Spec, sha string) string {
-	return filepath.Join(r.cacheRoot, sp.Owner, sp.Repo, sha12(sha), sanitizeSubpath(sp.Path))
+	return filepath.Join(r.cacheRoot, sp.Owner, sp.Repo, sha, r.cacheSeg(sp))
+}
+
+// cacheSeg is the subpath segment under a commit dir: the sanitized subpath, or the
+// "%manifest" sentinel for a manifest spec (which extracts the full tree).
+func (r *Resolver) cacheSeg(sp Spec) string {
+	if sp.Manifest {
+		return "%manifest"
+	}
+	return sanitizeSubpath(sp.Path)
+}
+
+// cachePrefixLookup finds a warm cache dir for an abbreviated sha: a commit dir
+// under owner/repo whose name starts with pin and that holds this spec's segment.
+// Exactly one match returns it; several is an ambiguous abbreviation (fatal); none
+// returns "" so the caller fetches cold.
+func (r *Resolver) cachePrefixLookup(sp Spec, pin string) (string, error) {
+	base := filepath.Join(r.cacheRoot, sp.Owner, sp.Repo)
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("%w: %w", ErrFetch, err)
+	}
+	seg := r.cacheSeg(sp)
+	var match string
+	found := 0
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), pin) {
+			continue
+		}
+		cand := filepath.Join(base, e.Name(), seg)
+		if st, statErr := os.Stat(cand); statErr == nil && st.IsDir() {
+			match = cand
+			found++
+		}
+	}
+	if found > 1 {
+		return "", fmt.Errorf("%w: abbreviated sha %q matches %d cached commits — pin the full 40-char sha", ErrResolveRef, pin, found)
+	}
+	return match, nil
 }
 
 // sha12 truncates a sha to the 12-char form recorded in the banner and cache key.

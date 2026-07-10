@@ -11,7 +11,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/yasyf/cc-guides/guide"
-	"github.com/yasyf/cc-guides/layout"
 	"github.com/yasyf/cc-guides/source"
 )
 
@@ -43,11 +42,15 @@ func runCat(ctx context.Context, cmd *cobra.Command, ref string, overrides map[s
 	return catLocal(cmd, ref)
 }
 
-// catImport fetches a shared import and prints it, probing both kinds.
+// catImport fetches a shared import and prints it, probing both kinds. The alias
+// must be declared by some layout in the repo (or supplied via --source).
 func catImport(ctx context.Context, cmd *cobra.Command, alias, name string, overrides map[string]string) error {
-	specs := map[string]string{layout.DefaultAlias: layout.DefaultSourceSpec}
-	for a, s := range overrides {
-		specs[a] = s
+	specs, err := discoveredSpecs(repoRoot(), overrides)
+	if err != nil {
+		return exit(2, err)
+	}
+	if _, ok := specs[alias]; !ok {
+		return exit(2, fmt.Errorf("unknown source alias %q: declare it in a layout.toml [sources.*] table or pass --source %s=<spec>", alias, alias))
 	}
 	resolver, err := source.New(source.Options{Specs: specs})
 	if err != nil {

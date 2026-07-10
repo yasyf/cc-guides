@@ -1,10 +1,10 @@
 name: Re-render guides
 
-# Reusable workflow: install the LATEST cc-guides, re-render every *.src.*
-# artifact, and commit the result — unless the diff is confined to banner lines
-# (a code-only cc-guides release), in which case skip: the skip certifies the
-# referenced content is identical across versions, so the old-version banner
-# still checks green under the Guides action.
+# Reusable workflow: install the LATEST cc-guides, re-render every artifact, and
+# commit the result — unless the only change is the lock file (a code-only
+# cc-guides release bumps the lock's version/pins but markers are version-free, so
+# every artifact is byte-identical). In that case skip: the committed lock's older
+# version still reproduces the same bytes and checks green under the Guides action.
 #
 # Called from each repo's guides.yml on repository_dispatch (cc-guides-render),
 # schedule, or workflow_dispatch. GITHUB_TOKEN pushes don't retrigger workflows,
@@ -71,34 +71,57 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          banner_only() {
-            # True when every changed content line in the diff is a banner line.
-            # The pattern covers both v1 (`… src=X | GENERATED`) and v2
-            # (`… src=X fragments=Y | GENERATED`) banners, so a code-only cc-guides
-            # release (which only bumps the version token and pins) is a skip.
-            ! git diff -U0 -- . | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' \
-              | grep -vE 'cc-guides [^ ]+ src=[^ ]+( fragments=[^ ]+)? \| GENERATED' | grep -q .
-          }
-
+          lock=".claude/fragments/cc-guides.lock"
           pushed=0
           landed=0
           for attempt in 1 2 3; do
             cc-guides render
-            if git diff --quiet -- .; then
+            # Stage everything (-A) so a first-migration's new, untracked lock counts.
+            git add -A -- .
+            if git diff --cached --quiet; then
               echo "already current — nothing to commit"
               landed=1
               break
             fi
-            if banner_only; then
-              echo "diff is banner-only (code-only cc-guides release) — skipping commit; old banner still checks green"
-              git checkout -- .
-              landed=1
-              break
+            if [ "$(git diff --cached --name-only)" = "$lock" ]; then
+              # Lock-only change. Skip (and revert) ONLY if every changed lock line
+              # is a `version = ` or `commit = ` pin: a code-only cc-guides release
+              # moves those but leaves every artifact byte-identical (markers are
+              # version-free), and the committed lock still reproduces them. Any
+              # change to `spec`, `artifacts`, `schema`, or a table header is
+              # semantically required and must commit. Counted with a single awk over
+              # a temp file — never a pipe into an early-exit consumer (grep -q/head),
+              # which SIGPIPEs (141) its producer under pipefail and, negated, would
+              # wrongly skip a required change.
+              lockdiff="$(mktemp)"
+              git diff --cached -U0 -- "$lock" > "$lockdiff"
+              nonpin="$(awk '/^[+-]/ && !/^(\+\+\+|---)/ && !/^[+-](version|commit) = / {n++} END{print n+0}' "$lockdiff")"
+              rm -f "$lockdiff"
+              if [ "$nonpin" -eq 0 ]; then
+                echo "only the lock's version/pins moved and artifacts are byte-identical — skipping commit; the committed lock still checks green"
+                git restore --staged -- .
+                git checkout -- .
+                git clean -fq -- "$lock"
+                landed=1
+                break
+              fi
             fi
-            # Pins from a freshly stamped (added) banner line, for the commit message.
-            pins="$(git diff -- . | grep '^+' | sed -nE 's/.*fragments=([^ ]+) \| GENERATED.*/\1/p' | head -n 1)"
-            git add -u
-            git commit -m "chore: re-render guides (cc-guides ${CC_GUIDES_VERSION}, fragments ${pins:-none})"
+            # Source pins for the commit message. Prefer the freshly written lock
+            # (alias@sha12); a v1-only repo has no lock, so fall back to the freshly
+            # stamped banner; failing either, omit pins (none). Both extractions are a
+            # single awk over a temp file — no pipe into an early-exit consumer.
+            if [ -f "$lock" ]; then
+              pins="$(awk -F'"' '
+                /^\[sources\./ { alias=$0; sub(/^\[sources\./, "", alias); sub(/\]$/, "", alias) }
+                /^commit = / { printf "%s%s@%s", (n++ ? "," : ""), alias, substr($2, 1, 12) }
+              ' "$lock")"
+            else
+              banners="$(mktemp)"
+              git diff --cached -- . > "$banners"
+              pins="$(awk '/^\+.*fragments=[^ ]+ \| GENERATED/ { s=$0; sub(/^.*fragments=/,"",s); sub(/ \| GENERATED.*/,"",s); print s; exit }' "$banners")"
+              rm -f "$banners"
+            fi
+            git commit -m "chore: re-render guides (cc-guides ${CC_GUIDES_VERSION}, sources ${pins:-none})"
             if git push; then
               pushed=1
               landed=1

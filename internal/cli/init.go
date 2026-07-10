@@ -12,7 +12,6 @@ import (
 	"github.com/yasyf/cc-guides/guide"
 	"github.com/yasyf/cc-guides/internal/legacy"
 	"github.com/yasyf/cc-guides/internal/migrate"
-	"github.com/yasyf/cc-guides/layout"
 )
 
 type initOpts struct {
@@ -71,7 +70,7 @@ func runInit(ctx context.Context, cmd *cobra.Command, artifact string, o initOpt
 	if err != nil {
 		return exit(2, err)
 	}
-	adapter := srcAdapter{ctx: ctx, imp: resolver, alias: layout.DefaultAlias}
+	adapter := srcAdapter{ctx: ctx, imp: resolver, alias: migrate.CCSkillsAlias}
 
 	// Stage 1: collapse stamps into a synthesized v1 source + reconstruction.
 	res, err := legacy.ToV1Source(abs, legacy.Options{KeepMismatched: o.keepMismatched, Resolver: adapter})

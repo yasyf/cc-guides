@@ -7,9 +7,9 @@ import (
 
 // Encode renders a Layout to canonical layout.toml bytes: the top-level
 // `fragments` array first (so TOML keeps it top-level), then one
-// `[sources.<alias>]` table per NON-default source. The baked-in
-// cc-skills → DefaultSourceSpec source is omitted — it is injected on parse — so a
-// migrated repo's layout.toml carries only its fragments.
+// `[sources.<alias>]` table per declared source, alias-sorted. Every source is
+// emitted — there is no baked-in default to omit — so a migrated repo's
+// layout.toml self-describes exactly which pack each import resolves against.
 func Encode(l *Layout) []byte {
 	var b strings.Builder
 	b.WriteString("fragments = [\n")
@@ -21,10 +21,7 @@ func Encode(l *Layout) []byte {
 	b.WriteString("]\n")
 
 	aliases := make([]string, 0, len(l.Sources))
-	for alias, spec := range l.Sources {
-		if alias == DefaultAlias && spec == DefaultSourceSpec {
-			continue
-		}
+	for alias := range l.Sources {
 		aliases = append(aliases, alias)
 	}
 	sort.Strings(aliases)

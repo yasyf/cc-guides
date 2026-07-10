@@ -6,8 +6,9 @@
 // `[sources.<alias>]` tables.
 //
 // Unknown keys are a hard error, never a silent empty render: a typo'd key must
-// fail loudly. The one baked-in default alias, cc-skills, is injected only when
-// the file does not declare it.
+// fail loudly. Every imported alias must be declared by a `[sources.<alias>]`
+// table — there is no baked-in default source; a layout addresses its packs
+// explicitly, exactly like packs.toml.
 package layout
 
 import (
@@ -20,14 +21,6 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/yasyf/cc-guides/guide"
-)
-
-// DefaultAlias and DefaultSourceSpec are the one baked-in import source. This
-// exact [sources.cc-skills] table is injected whenever a layout does not declare
-// it, so a repo's layout.toml can import `cc-skills:<name>` with no boilerplate.
-const (
-	DefaultAlias      = "cc-skills"
-	DefaultSourceSpec = "github:yasyf/cc-skills//guides@main"
 )
 
 // Sentinel errors. All denote invalid input (CLI exit 2).
@@ -138,10 +131,6 @@ func Parse(data []byte) (*Layout, error) {
 
 	if len(lay.Entries) == 0 {
 		return nil, ErrEmptyCompose
-	}
-
-	if _, ok := lay.Sources[DefaultAlias]; !ok {
-		lay.Sources[DefaultAlias] = DefaultSourceSpec
 	}
 
 	for _, e := range lay.Entries {

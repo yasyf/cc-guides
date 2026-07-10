@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,8 +13,13 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/yasyf/cc-guides/guide"
+	"github.com/yasyf/cc-guides/lockfile"
 	"github.com/yasyf/cc-guides/source"
 )
+
+// errLockStale is a lock whose recorded source spec for an imported alias no
+// longer matches the layout (or is missing) — the repo must re-render.
+var errLockStale = errors.New("lock out of date — run cc-guides render")
 
 type checkOpts struct {
 	diff    bool
@@ -61,6 +67,11 @@ func runCheck(ctx context.Context, cmd *cobra.Command, args []string, o checkOpt
 		return exit(2, err)
 	}
 
+	lock, _, err := lockfile.Load(root)
+	if err != nil {
+		return exit(2, err)
+	}
+
 	worst := 0
 	bump := func(code int) {
 		if worst < code {
@@ -68,7 +79,7 @@ func runCheck(ctx context.Context, cmd *cobra.Command, args []string, o checkOpt
 		}
 	}
 	for _, dir := range v3dirs {
-		status, path, invalid, cerr := checkV3Dir(ctx, root, dir, overrides, o.diff, stderr)
+		status, path, invalid, cerr := checkV3Dir(ctx, root, dir, overrides, lock, o.diff, stderr)
 		record(out, stderr, dir, status, path, invalid, cerr, bump)
 	}
 	for _, src := range v1srcs {
@@ -94,10 +105,11 @@ func record(out, stderr io.Writer, label, status, path string, invalid bool, err
 	}
 }
 
-// checkV3Dir re-composes one artifact dir pinned to its banner's shas and compares
-// it to disk. The reproduction stamps the banner's own version + fragments strings
-// verbatim, so a cross-version check never false-STALEs on the version token.
-func checkV3Dir(ctx context.Context, root, dir string, overrides map[string]string, diff bool, stderr io.Writer) (status, path string, invalid bool, err error) {
+// checkV3Dir re-composes one artifact dir and byte-compares it to disk. Routing is
+// per artifact, so a partial lock never breaks an un-migrated sibling: a target the
+// lock records is pinned off the lock; a target absent from the lock but carrying a
+// legacy banner falls back to the banner; anything else is invalid input.
+func checkV3Dir(ctx context.Context, root, dir string, overrides map[string]string, lock *lockfile.Lock, diff bool, stderr io.Writer) (status, path string, invalid bool, err error) {
 	ad, err := loadArtifactDir(root, dir)
 	if err != nil {
 		return "", dir, true, err
@@ -110,10 +122,51 @@ func checkV3Dir(ctx context.Context, root, dir string, overrides map[string]stri
 		}
 		return "", ad.target, true, err
 	}
+	if lock != nil && lock.HasArtifact(ad.target) {
+		return checkV3Locked(ctx, ad, disk, lock, overrides, diff, stderr)
+	}
+	return checkV3Banner(ctx, ad, disk, overrides, diff, stderr)
+}
+
+// checkV3Locked pins every imported alias to the lock's recorded commit, hard-
+// erroring if the layout's effective spec disagrees with (or is absent from) the
+// lock. The disk comparison strips the marker (md/sh) or uses the raw body (json).
+func checkV3Locked(ctx context.Context, ad *artifactDir, disk []byte, lock *lockfile.Lock, overrides map[string]string, diff bool, stderr io.Writer) (status, path string, invalid bool, err error) {
+	specs := mergeSpecs(ad.lay.Sources, overrides)
+	pinned := map[string]string{}
+	for _, alias := range ad.lay.UsedAliases() {
+		lp, ok := lock.Sources[alias]
+		if !ok {
+			return "", ad.target, true, fmt.Errorf("%w (%s imports %q with no lock entry)", errLockStale, ad.target, alias)
+		}
+		if lp.Spec != specs[alias] {
+			return "", ad.target, true, fmt.Errorf("%w (%s source %q is %q, lock has %q)", errLockStale, ad.target, alias, specs[alias], lp.Spec)
+		}
+		pinned[alias] = lp.Commit
+	}
+	resolver, err := source.New(source.Options{Specs: specs, Pinned: pinned})
+	if err != nil {
+		return "", ad.target, true, err
+	}
+	body, err := ad.compose(ctx, resolver)
+	if err != nil {
+		return "", ad.target, true, err
+	}
+	diskBody := disk
+	if ad.kind != guide.KindJSON {
+		diskBody, _ = guide.StripMarker(ad.kind, disk)
+	}
+	return compareBodies(ad.target, diskBody, body, diff, stderr), ad.target, false, nil
+}
+
+// checkV3Banner is the pre-lock legacy path: pin off the artifact's own banner and
+// warn that the repo should re-render to adopt the lock.
+func checkV3Banner(ctx context.Context, ad *artifactDir, disk []byte, overrides map[string]string, diff bool, stderr io.Writer) (status, path string, invalid bool, err error) {
 	info, ok := guide.ParseBanner(ad.kind, disk)
 	if !ok {
-		return "", ad.target, true, fmt.Errorf("%s has no cc-guides banner (run 'cc-guides render')", ad.target)
+		return "", ad.target, true, fmt.Errorf("%s has no cc-guides marker, banner, or lock (run 'cc-guides render')", ad.target)
 	}
+	foutln(stderr, "cc-guides: warning:", ad.target, "is pinned by a legacy banner with no lock — run 'cc-guides render' to adopt the lock file")
 	resolver, err := source.New(source.Options{Specs: mergeSpecs(ad.lay.Sources, overrides), Pinned: parsePins(info.Fragments)})
 	if err != nil {
 		return "", ad.target, true, err

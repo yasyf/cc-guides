@@ -116,6 +116,9 @@ func (ad *artifactDir) compose(ctx context.Context, imp source.Importer) ([]byte
 		}
 		pieces = append(pieces, p)
 	}
+	if ad.kind == guide.KindJSON {
+		return guide.ComposeJSON(pieces)
+	}
 	return guide.Compose(ad.kind, pieces)
 }
 
@@ -167,23 +170,4 @@ func importPiece(ctx context.Context, imp source.Importer, e layout.Entry, kind 
 		args = e.Args
 	}
 	return guide.Piece{Body: body, Args: args, Keys: e.Keys, Origin: e.Ref() + "@" + pin}, nil
-}
-
-// pinString builds the banner's `fragments=` value for a layout composed against
-// imp: alias-sorted `alias@sha12` pins, `none` for zero imports, or `local` when
-// any used alias resolved from a local source.
-func pinString(lay *layout.Layout, imp source.Importer) string {
-	aliases := lay.UsedAliases()
-	if len(aliases) == 0 {
-		return "none"
-	}
-	pins := make([]string, 0, len(aliases))
-	for _, a := range aliases {
-		pin, ok := imp.Pin(a)
-		if !ok || pin == source.LocalPin {
-			return source.LocalPin
-		}
-		pins = append(pins, a+"@"+pin)
-	}
-	return strings.Join(pins, ",")
 }
