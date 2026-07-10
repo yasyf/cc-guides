@@ -25,7 +25,7 @@ type Piece struct {
 	Origin string            // diagnostic label, e.g. "intro.fragment.md" or "cc-skills:ccx@abcdef012345"
 }
 
-// Compose joins resolved pieces into an artifact body WITHOUT a banner, ending in
+// Compose joins resolved pieces into an artifact body WITHOUT a marker, ending in
 // exactly one newline. The rules (mirrored in the plan):
 //
 //	(2) tokens are substituted only for pieces carrying args (two-way strict);

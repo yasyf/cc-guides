@@ -46,10 +46,11 @@ House rules for agents.
 Driving with an agent? Paste this:
 
 ```text
-Install cc-guides (`brew install yasyf/tap/cc-guides`). I have a hand-written
-AGENTS.md — migrate it: run `cc-guides init AGENTS.md`, commit the
-.claude/fragments/AGENTS.md/ directory it produces, and wire `cc-guides check`
-into CI. Reference: `cc-guides --help`.
+Install cc-guides (`brew install yasyf/tap/cc-guides`). Give AGENTS.md a
+.claude/fragments/AGENTS.md/ layout: a layout.toml composing my local
+*.fragment.md prose with the shared guides I import, then run `cc-guides render`
+(it writes AGENTS.md and .claude/fragments/cc-guides.lock) and wire
+`cc-guides check` into CI. Reference: `cc-guides --help`.
 ```
 
 ---
@@ -93,14 +94,18 @@ fragments = [
 
 `render` reads `ccx.fragment.md` from the artifact dir instead of fetching the shared guide, and a layout that imports nothing locks no sources at all.
 
-### Migrate an existing repo
+### Adopt the lock on an older repo
 
-A repo already rendered by an older cc-guides, or holding a hand-pasted guide, moves to the layout shape in one command. `migrate` converts a v1 `X.src.md` source; `init` converts a hand-written stamped artifact. Both write the `.claude/fragments/<target>/` directory and self-verify the composition reproduces the current artifact byte-for-byte, refusing to write on a mismatch:
+A repo rendered by an older cc-guides (`0.1.12` or earlier) carries a per-artifact banner and no `.claude/fragments/cc-guides.lock`. `check` and the CI action are lock-only, so adopt the lock with one render against the current binary — it rewrites each artifact with a version-free marker and writes the lock:
 
 ```console
-$ cc-guides migrate AGENTS.src.md
-MIGRATED	AGENTS.src.md -> .claude/fragments/AGENTS.md/
+$ cc-guides render
+rendered .claude/fragments/AGENTS.md -> AGENTS.md
+
+$ git add .claude/fragments/cc-guides.lock AGENTS.md
 ```
+
+Commit the lock alongside the artifacts. From then on a new cc-guides release re-renders byte-identically, so the lock never needs a manual bump.
 
 ## Composition
 
@@ -127,10 +132,8 @@ One invocation per surface; run `cc-guides <command> --help` for the full flag l
 
 | Command | What it does |
 |---|---|
-| `render [paths…]` | Compose each artifact dir to its target. No paths: discover every layout under the repo. |
+| `render [paths…]` | Compose each artifact dir to its target and write the lock. No paths: discover every layout under the repo. |
 | `check [paths…]` | Re-compose in memory, pinned to the lock's commits, and byte-compare. TSV `OK`/`STALE`/`MISSING`; exit 1 on drift, 2 on invalid input. |
-| `migrate [paths…]` | Convert a v1 `X.src.{md,sh}` source to an artifact dir, self-verifying the round-trip. |
-| `init <artifact>` | Convert a hand-written stamped markdown artifact to an artifact dir. |
 | `lint <dir>` | Check a shared-guides directory for purity: LF, one trailing newline, kind, shell shebang. |
 | `list` | List each artifact dir and the fragments it composes. |
 | `cat <ref>` | Print a fragment body: an `alias:name` import or a local piece by name. |

@@ -1,8 +1,7 @@
-// Package guide is a generic, kind-aware renderer for source files that expand
-// column-0 `{{> name}}` include directives against a Resolver and carry a stable
-// GENERATED banner. It knows nothing about the specific fragments it renders:
-// callers supply a Resolver (see the fragments package for the embedded canonical
-// bodies, and DirResolver/Chain for local overrides). The pipeline is Parse → a
-// Doc of literal and include Nodes → Render → AddBanner, with a sentinel error
-// taxonomy the CLI maps to exit codes.
+// Package guide is a generic, kind-aware composer for artifacts built from local
+// prose fragments and imported shared fragments. It knows nothing about the
+// specific fragments it composes: callers resolve imports through a source.Importer
+// and pass the resolved bodies as Pieces. The pipeline is Compose (or ComposeJSON)
+// over the ordered pieces → AddMarker, with a sentinel error taxonomy the CLI maps
+// to exit codes.
 package guide

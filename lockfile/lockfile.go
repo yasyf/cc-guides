@@ -1,7 +1,7 @@
 // Package lockfile reads and writes .claude/fragments/cc-guides.lock — the
-// repo-level provenance record that moves version and commit pins out of artifact
-// banners. render writes it; check and the CI action read it to pin every alias
-// to the exact commit the artifacts were composed against.
+// repo-level provenance record: the render version and one commit pin per source
+// alias. render writes it; check and the CI action read it to pin every alias to
+// the exact commit the artifacts were composed against.
 package lockfile
 
 import (

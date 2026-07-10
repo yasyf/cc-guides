@@ -97,7 +97,7 @@ func (ad *artifactDir) validateFiles() error {
 }
 
 // compose resolves every layout entry to a piece and composes the artifact body
-// (without a banner). Local pieces are read from the dir; imports come from the
+// (without a marker). Local pieces are read from the dir; imports come from the
 // resolver, which pins each alias's sha.
 func (ad *artifactDir) compose(ctx context.Context, imp source.Importer) ([]byte, error) {
 	pieces := make([]guide.Piece, 0, len(ad.lay.Entries))

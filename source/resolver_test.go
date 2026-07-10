@@ -133,8 +133,8 @@ func TestResolveWarmCacheOffline(t *testing.T) {
 		t.Fatalf("prime: found=%v err=%v", found, err)
 	}
 	// Second resolver shares the cache and has a fetcher that fails every network
-	// call — it must still resolve, pinned to a 12-char sha off a legacy banner,
-	// fully offline (the cache keys on the full sha, so lookup matches by prefix).
+	// call — it must still resolve, pinned to an abbreviated 12-char sha, fully
+	// offline (the cache keys on the full sha, so lookup matches by prefix).
 	offline := &fixtureFetcher{sha: fixtureSha, failTar: true}
 	r2, _ := New(Options{Specs: specs, Pinned: map[string]string{"cc-skills": "abcdef012345"}, Fetcher: offline, CacheRoot: cache})
 	if _, found, err := r2.Resolve(context.Background(), "cc-skills", "ccx", guide.KindMD); err != nil || !found {

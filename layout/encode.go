@@ -8,8 +8,8 @@ import (
 // Encode renders a Layout to canonical layout.toml bytes: the top-level
 // `fragments` array first (so TOML keeps it top-level), then one
 // `[sources.<alias>]` table per declared source, alias-sorted. Every source is
-// emitted — there is no baked-in default to omit — so a migrated repo's
-// layout.toml self-describes exactly which pack each import resolves against.
+// emitted — there is no baked-in default to omit — so a repo's layout.toml
+// self-describes exactly which pack each import resolves against.
 func Encode(l *Layout) []byte {
 	var b strings.Builder
 	b.WriteString("fragments = [\n")

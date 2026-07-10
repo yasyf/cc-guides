@@ -270,6 +270,26 @@ func TestHandwrittenOverwriteRefused(t *testing.T) {
 	}
 }
 
+// A legacy pre-lock banner no longer marks a file as managed: render refuses it
+// like any handwritten file. Adopt via --force once; the lock then owns the
+// target, so a plain re-render succeeds.
+func TestRenderLegacyBannerNoLongerOverwritable(t *testing.T) {
+	repo(t)
+	fixture := guidesFixture(t)
+	write(t, ".claude/fragments/AGENTS.md/layout.toml", "fragments = [\"cc-skills:ccx\"]\n"+ccSkillsSource)
+	write(t, "AGENTS.md", "<!-- cc-guides 0.1.7 src=.claude/fragments/AGENTS.md fragments=local | GENERATED — do not edit -->\n## Compact Context\nccx body\n")
+	code, _, errout := exec("render", "--source", srcFlag(fixture))
+	if code != 2 || !strings.Contains(errout, "handwritten") {
+		t.Fatalf("code=%d err=%q, want handwritten-overwrite refusal", code, errout)
+	}
+	if code, _, errout := exec("render", "--source", srcFlag(fixture), "--force"); code != 0 {
+		t.Fatalf("--force adoption: code=%d err=%s", code, errout)
+	}
+	if code, _, errout := exec("render", "--source", srcFlag(fixture)); code != 0 {
+		t.Fatalf("re-render after adoption: code=%d err=%s", code, errout)
+	}
+}
+
 func TestLint(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "md", "ok.md"), "## Clean\nbody\n")
@@ -291,65 +311,6 @@ func TestLintShellMustHaveShebang(t *testing.T) {
 	code, _, errout := exec("lint", dir)
 	if code != 1 || !strings.Contains(errout, "shebang") {
 		t.Fatalf("code=%d err=%q", code, errout)
-	}
-}
-
-func TestMigrateRoundTrip(t *testing.T) {
-	root := repo(t)
-	fixture := guidesFixture(t)
-	// A v1-shaped source and its deployed (v1-bannered) artifact.
-	src := "# Repo\n\nIntro prose.\n\n{{> ccx}}\n\nMore prose.\n"
-	write(t, "AGENTS.src.md", src)
-	body := "# Repo\n\nIntro prose.\n\n## Compact Context\nccx body\n\nMore prose.\n"
-	write(t, "AGENTS.md", "<!-- cc-guides 0.1.7 src=AGENTS.src.md | GENERATED — do not edit -->\n"+body)
-
-	code, out, errout := exec("migrate", "--source", srcFlag(fixture), "AGENTS.src.md")
-	if code != 0 {
-		t.Fatalf("migrate exit=%d out=%q err=%s", code, out, errout)
-	}
-	if !strings.Contains(out, "MIGRATED") {
-		t.Fatalf("migrate out = %q", out)
-	}
-	// The layout dir + fragment files exist; the .src is gone.
-	if _, err := os.Stat(filepath.Join(root, ".claude/fragments/AGENTS.md/layout.toml")); err != nil {
-		t.Fatalf("layout.toml missing: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, "AGENTS.src.md")); !os.IsNotExist(err) {
-		t.Fatalf("source not removed: %v", err)
-	}
-	lt, _ := os.ReadFile(filepath.Join(root, ".claude/fragments/AGENTS.md/layout.toml")) // #nosec G304 -- test reads a temp-repo path it just wrote
-	if !strings.Contains(string(lt), "cc-skills:ccx") {
-		t.Fatalf("layout.toml:\n%s", lt)
-	}
-	// The re-rendered artifact byte-preserves the body and checks OK.
-	art, _ := os.ReadFile(filepath.Join(root, "AGENTS.md")) // #nosec G304 -- test reads a temp-repo path it just wrote
-	if !strings.HasSuffix(string(art), body) {
-		t.Fatalf("migrated artifact body changed:\n%s", art)
-	}
-	if code, out, errout := exec("check", "--source", srcFlag(fixture)); code != 0 {
-		t.Fatalf("post-migrate check exit=%d out=%q err=%s", code, out, errout)
-	}
-}
-
-func TestMigrateMismatchWritesNothing(t *testing.T) {
-	root := repo(t)
-	fixture := guidesFixture(t)
-	write(t, "AGENTS.src.md", "# Repo\n\n{{> ccx}}\n")
-	// Deployed artifact whose body does NOT match what compose would produce.
-	write(t, "AGENTS.md", "<!-- cc-guides 0.1.7 src=AGENTS.src.md | GENERATED -->\n# Repo\n\nWRONG BODY\n")
-	code, out, errout := exec("migrate", "--source", srcFlag(fixture), "AGENTS.src.md")
-	if code != 1 || !strings.Contains(out, "MISMATCH") {
-		t.Fatalf("code=%d out=%q, want MISMATCH exit 1", code, out)
-	}
-	// The self-verify diff must reach stderr so an operator can hand-fix.
-	if !strings.Contains(errout, "WRONG BODY") || !strings.Contains(errout, "(rendered)") {
-		t.Fatalf("mismatch diff not printed to stderr: %q", errout)
-	}
-	if _, err := os.Stat(filepath.Join(root, ".claude/fragments/AGENTS.md/layout.toml")); !os.IsNotExist(err) {
-		t.Fatal("mismatch must write nothing")
-	}
-	if _, err := os.Stat(filepath.Join(root, "AGENTS.src.md")); err != nil {
-		t.Fatal("mismatch must not remove the source")
 	}
 }
 
@@ -381,29 +342,6 @@ func TestList(t *testing.T) {
 	}
 	if !strings.Contains(out, "AGENTS.md\tmd\tintro,cc-skills:ccx") {
 		t.Fatalf("list out = %q", out)
-	}
-}
-
-func TestRenderV1Transitional(t *testing.T) {
-	repo(t)
-	fixture := guidesFixture(t)
-	write(t, "AGENTS.src.md", "# Repo\n\n{{> ccx}}\n")
-	code, _, errout := exec("render", "--source", srcFlag(fixture))
-	if code != 0 {
-		t.Fatalf("v1 render exit = %d: %s", code, errout)
-	}
-	if !strings.Contains(errout, "deprecated") {
-		t.Fatalf("expected deprecation warning, got %q", errout)
-	}
-	disk, err := os.ReadFile("AGENTS.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasPrefix(string(disk), "<!-- cc-guides dev src=AGENTS.src.md fragments=local | GENERATED") {
-		t.Fatalf("v1 banner: %q", firstLine(string(disk)))
-	}
-	if code, out, errout := exec("check", "--source", srcFlag(fixture)); code != 0 {
-		t.Fatalf("v1 check exit=%d out=%q err=%s", code, out, errout)
 	}
 }
 
@@ -454,113 +392,6 @@ func TestRenderWhitespaceOnlyLocalFragmentRejected(t *testing.T) {
 	write(t, ".claude/fragments/AGENTS.md/body.fragment.md", " \n \n")
 	if code, _, errout := exec("render"); code != 2 || !strings.Contains(errout, "whitespace-only") {
 		t.Fatalf("code=%d err=%q, want whitespace-only error", code, errout)
-	}
-}
-
-// #3: an explicit v1 source arg whose target escapes the repo is rejected pre-write.
-func TestRenderV1SourceEscapeRejected(t *testing.T) {
-	repo(t)
-	code, _, errout := exec("render", "../outside.src.md")
-	if code != 2 || !strings.Contains(errout, "escapes the repo root") {
-		t.Fatalf("code=%d err=%q, want escape error", code, errout)
-	}
-}
-
-// #5: a directive-free v1 source renders fully offline (no cc-skills resolution).
-func TestRenderDirectiveFreeV1Offline(t *testing.T) {
-	repo(t)
-	write(t, "AGENTS.src.md", "# Just prose\n\nNo directives at all.\n")
-	// No --source, no network: a directive-free source must still render.
-	if code, _, errout := exec("render"); code != 0 {
-		t.Fatalf("directive-free v1 render exit = %d: %s", code, errout)
-	}
-	disk, _ := os.ReadFile("AGENTS.md")
-	if !strings.Contains(firstLine(string(disk)), "fragments=none") {
-		t.Fatalf("directive-free banner must be fragments=none: %q", firstLine(string(disk)))
-	}
-}
-
-// #11: a deployed artifact carrying a v1 banner (no fragments= field) must check OK,
-// not STALE — the banner is echoed verbatim, never re-serialized as v2.
-func TestCheckV1BannerVerbatimPassthrough(t *testing.T) {
-	repo(t)
-	fixture := guidesFixture(t)
-	write(t, "AGENTS.src.md", "# Repo\n\n{{> ccx}}\n")
-	// A genuine v1-bannered artifact whose body matches the composition.
-	write(t, "AGENTS.md", "<!-- cc-guides 0.1.7 src=AGENTS.src.md | GENERATED — do not edit -->\n# Repo\n\n## Compact Context\nccx body\n")
-	code, out, errout := exec("check", "--source", srcFlag(fixture))
-	if code != 0 || out != "OK\tAGENTS.md\n" {
-		t.Fatalf("v1 banner passthrough: code=%d out=%q err=%s", code, out, errout)
-	}
-}
-
-// #14: a CRLF flat override in the transitional v1 render path is rejected.
-func TestRenderV1CRLFOverrideRejected(t *testing.T) {
-	repo(t)
-	fixture := guidesFixture(t)
-	write(t, "AGENTS.src.md", "# Repo\n\n{{> ccx}}\n")
-	write(t, ".claude/fragments/ccx.md", "## Local\r\nbody\r\n")
-	code, _, errout := exec("render", "--source", srcFlag(fixture))
-	if code != 2 || !strings.Contains(errout, "CRLF") {
-		t.Fatalf("code=%d err=%q, want CRLF error from the flat override", code, errout)
-	}
-	if _, err := os.Stat("AGENTS.md"); err == nil {
-		t.Fatal("nothing must be written when a flat override is CRLF")
-	}
-}
-
-// refuted-#8 (restored): a source whose render target is itself source-shaped is
-// invalid input, and the preflight fails before any write.
-func TestRenderSourceShapedTargetRejected(t *testing.T) {
-	repo(t)
-	write(t, "x.src.src.md", "# x\n\nprose only.\n")
-	code, _, errout := exec("render")
-	if code != 2 || !strings.Contains(errout, "source file") {
-		t.Fatalf("code=%d err=%q, want source-shaped-target error", code, errout)
-	}
-	if _, err := os.Stat("x.src.md"); err == nil {
-		t.Fatal("nothing must be written on preflight failure")
-	}
-}
-
-func TestCheckSourceShapedTargetInvalid(t *testing.T) {
-	repo(t)
-	write(t, "x.src.src.md", "# x\n\nprose only.\n")
-	code, out, errout := exec("check")
-	if code != 2 {
-		t.Fatalf("exit = %d, want 2", code)
-	}
-	if out != "" || !strings.Contains(errout, "source file") {
-		t.Fatalf("out=%q err=%q, want invalid not compared", out, errout)
-	}
-}
-
-// #4/#9 end-to-end: migrate folds a flat v1 override into a local fragment and
-// git-rm's the flat file.
-func TestMigrateFoldsFlatOverride(t *testing.T) {
-	root := repo(t)
-	fixture := guidesFixture(t)
-	write(t, "AGENTS.src.md", "# Repo\n\n{{> ccx}}\n")
-	write(t, ".claude/fragments/ccx.md", "## Local ccx\nrepo-specific body\n")
-	// The deployed artifact was v1-rendered with the override (local: markers).
-	body := "# Repo\n\n<!-- local: .claude/fragments/ccx.md -->\n## Local ccx\nrepo-specific body\n<!-- /local: .claude/fragments/ccx.md -->\n"
-	write(t, "AGENTS.md", "<!-- cc-guides 0.1.7 src=AGENTS.src.md | GENERATED -->\n"+body)
-
-	code, out, errout := exec("migrate", "--source", srcFlag(fixture), "AGENTS.src.md")
-	if code != 0 {
-		t.Fatalf("migrate exit=%d out=%q err=%s", code, out, errout)
-	}
-	// The override became a local fragment; the flat file and the source are gone.
-	frag, err := os.ReadFile(filepath.Join(root, ".claude/fragments/AGENTS.md/ccx.fragment.md")) // #nosec G304 -- test path
-	if err != nil || !strings.Contains(string(frag), "repo-specific body") {
-		t.Fatalf("override not folded to local fragment: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, ".claude/fragments/ccx.md")); !os.IsNotExist(err) {
-		t.Fatal("flat override file must be removed after folding")
-	}
-	lt, _ := os.ReadFile(filepath.Join(root, ".claude/fragments/AGENTS.md/layout.toml")) // #nosec G304 -- test path
-	if strings.Contains(string(lt), "cc-skills:ccx") {
-		t.Fatalf("folded override must not remain an import:\n%s", lt)
 	}
 }
 
@@ -636,30 +467,40 @@ func TestLintJSON(t *testing.T) {
 	}
 }
 
-// A legacy-bannered artifact with no lock still checks via the banner, with a
-// deprecation warning nudging a re-render.
-func TestCheckV3LegacyBannerFallback(t *testing.T) {
-	repo(t)
-	fixture := guidesFixture(t)
-	write(t, ".claude/fragments/AGENTS.md/layout.toml", "fragments = [\"cc-skills:ccx\"]\n"+ccSkillsSource)
-	write(t, "AGENTS.md", "<!-- cc-guides 0.1.7 src=.claude/fragments/AGENTS.md fragments=local | GENERATED — do not edit -->\n## Compact Context\nccx body\n")
-	code, out, errout := exec("check", "--source", srcFlag(fixture))
-	if code != 0 || out != "OK\tAGENTS.md\n" {
-		t.Fatalf("legacy fallback: code=%d out=%q err=%s", code, out, errout)
-	}
-	if !strings.Contains(errout, "legacy banner") {
-		t.Fatalf("expected legacy-banner deprecation warning, got %q", errout)
-	}
-}
-
-// A marker'd artifact with the lock removed cannot be pinned — invalid input.
+// A marker'd artifact with no lock entry cannot be pinned — invalid input.
 func TestCheckMarkerNoLockInvalid(t *testing.T) {
 	repo(t)
 	fixture := guidesFixture(t)
 	write(t, ".claude/fragments/AGENTS.md/layout.toml", "fragments = [\"cc-skills:ccx\"]\n"+ccSkillsSource)
 	write(t, "AGENTS.md", mdMarker(".claude/fragments/AGENTS.md")+"\n## Compact Context\nccx body\n")
-	if code, _, errout := exec("check", "--source", srcFlag(fixture)); code != 2 || !strings.Contains(errout, "no cc-guides marker, banner, or lock") {
+	if code, _, errout := exec("check", "--source", srcFlag(fixture)); code != 2 || !strings.Contains(errout, "no cc-guides.lock") {
 		t.Fatalf("marker-no-lock: code=%d err=%q", code, errout)
+	}
+}
+
+// A partial lock routes per artifact: the locked target still checks OK, while a
+// sibling absent from the (non-nil) lock is invalid input — there is no banner
+// fallback anymore, so the repo must render to register it.
+func TestCheckPartialLockPerArtifact(t *testing.T) {
+	repo(t)
+	fixture := guidesFixture(t)
+	write(t, ".claude/fragments/AGENTS.md/layout.toml", "fragments = [\"cc-skills:ccx\"]\n"+ccSkillsSource)
+	if code, _, errout := exec("render", "--source", srcFlag(fixture)); code != 0 {
+		t.Fatalf("render: code=%d err=%s", code, errout)
+	}
+	// A sibling layout whose artifact carries a marker but has no lock entry.
+	write(t, ".claude/fragments/CLAUDE.md/layout.toml", "fragments = [\"cc-skills:ccx\"]\n"+ccSkillsSource)
+	write(t, "CLAUDE.md", mdMarker(".claude/fragments/CLAUDE.md")+"\n## Compact Context\nccx body\n")
+
+	code, out, errout := exec("check", "--source", srcFlag(fixture))
+	if code != 2 {
+		t.Fatalf("partial-lock check: code=%d out=%q err=%s, want 2", code, out, errout)
+	}
+	if !strings.Contains(out, "OK\tAGENTS.md") {
+		t.Fatalf("locked artifact must still check OK, got %q", out)
+	}
+	if !strings.Contains(errout, "no cc-guides.lock entry") || !strings.Contains(errout, "CLAUDE.md") {
+		t.Fatalf("unlocked sibling must be invalid input naming CLAUDE.md, got %q", errout)
 	}
 }
 
@@ -675,32 +516,6 @@ func TestCheckStaleLock(t *testing.T) {
 	// in the layout) no longer matches the lock's recorded local override spec.
 	if code, _, errout := exec("check"); code != 2 || !strings.Contains(errout, "lock out of date") {
 		t.Fatalf("stale lock: code=%d err=%q", code, errout)
-	}
-}
-
-// A partial lock routes per artifact: the migrated target checks in lock mode,
-// while an un-migrated sibling carrying a legacy banner but absent from the lock
-// falls back to the banner (with a deprecation warning) instead of erroring.
-func TestCheckPartialLockPerArtifact(t *testing.T) {
-	repo(t)
-	fixture := guidesFixture(t)
-	write(t, ".claude/fragments/AGENTS.md/layout.toml", "fragments = [\"cc-skills:ccx\"]\n"+ccSkillsSource)
-	if code, _, errout := exec("render", "--source", srcFlag(fixture)); code != 0 {
-		t.Fatalf("render: code=%d err=%s", code, errout)
-	}
-	// An un-migrated sibling with a legacy banner and no lock entry.
-	write(t, ".claude/fragments/CLAUDE.md/layout.toml", "fragments = [\"cc-skills:ccx\"]\n"+ccSkillsSource)
-	write(t, "CLAUDE.md", "<!-- cc-guides 0.1.7 src=.claude/fragments/CLAUDE.md fragments=local | GENERATED — do not edit -->\n## Compact Context\nccx body\n")
-
-	code, out, errout := exec("check", "--source", srcFlag(fixture))
-	if code != 0 {
-		t.Fatalf("partial-lock check: code=%d out=%q err=%s", code, out, errout)
-	}
-	if !strings.Contains(out, "OK\tAGENTS.md") || !strings.Contains(out, "OK\tCLAUDE.md") {
-		t.Fatalf("both artifacts must be OK, got %q", out)
-	}
-	if !strings.Contains(errout, "legacy banner") {
-		t.Fatalf("expected a legacy-banner warning for the un-locked sibling, got %q", errout)
 	}
 }
 

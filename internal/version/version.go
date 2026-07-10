@@ -31,9 +31,9 @@ func String() string {
 }
 
 // Bare returns the ldflags-injected Version with any leading "v" stripped. This
-// is the token stamped into the cc-guides banner and printed by `--version`; it
-// reads Version directly (not String) so an unstamped build cleanly reports
-// "dev" — the banner contract's signal that the artifact is not release-pinned.
+// is the token recorded in the cc-guides lock and printed by `--version`; it reads
+// Version directly (not String) so an unstamped build cleanly reports "dev" — the
+// lock's signal that the render is not release-pinned.
 func Bare() string {
 	return strings.TrimPrefix(Version, "v")
 }

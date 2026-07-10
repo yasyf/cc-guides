@@ -14,13 +14,15 @@ import (
 
 // LocalPin is the sentinel pin recorded for an alias resolved from a local
 // directory (a `--source alias=<dir>` override or a test fixture) rather than a
-// pinned commit — it renders `fragments=local`, which the action refuses.
+// pinned commit — the lock records it as `commit = "local"`, which the action
+// refuses.
 const LocalPin = "local"
 
 // Importer resolves shared-fragment imports (`alias:name`) to bodies and records
-// the pin — a 12-char sha or LocalPin — of every alias it resolves, for the
-// banner. CLI render/check and the migrator consume this interface; tests provide
-// a fixture implementation.
+// the pin — a 12-char sha or LocalPin — of every alias it resolves. Pin serves
+// piece Origin labels; the resolver's FullPin carries the full sha into the lock
+// file (render's writeLock). CLI render/check consume this interface; tests
+// provide a fixture implementation.
 type Importer interface {
 	// Resolve returns the body for alias:name of kind. found=false means the
 	// alias resolves but has no such fragment (the caller probes the other kind to
@@ -37,8 +39,9 @@ type Options struct {
 	// A spec beginning `github:` is fetched by sha; any other value is a local
 	// directory read directly (dev/E2E) and pinned as LocalPin.
 	Specs map[string]string
-	// Pinned maps alias -> commit sha to use verbatim (check mode, off the banner),
-	// skipping ls-remote. Absent aliases resolve their ref fresh.
+	// Pinned maps alias -> commit sha to use verbatim (check and scoped-render
+	// mode, off the lock), skipping ls-remote. Absent aliases resolve their ref
+	// fresh.
 	Pinned map[string]string
 	// Fetcher is the network surface; nil uses the production git+codeload fetcher.
 	Fetcher Fetcher
@@ -56,7 +59,7 @@ type Resolver struct {
 
 	mu       sync.Mutex
 	sources  map[string]*resolved // alias -> resolved source (memoized)
-	used     map[string]string    // alias -> recorded sha12 pin (banner)
+	used     map[string]string    // alias -> recorded sha12 pin (origin labels)
 	usedFull map[string]string    // alias -> recorded full sha / LocalPin (lock)
 }
 
@@ -213,8 +216,8 @@ func (r *Resolver) manifestGuidesDir(treeDir string, sp Spec) (string, error) {
 // verbatim hex ref, both offline; otherwise git ls-remote.
 func (r *Resolver) resolveSha(ctx context.Context, alias string, sp Spec) (string, error) {
 	if p, ok := r.pinned[alias]; ok && p != "" && p != "none" && p != LocalPin {
-		// A pin comes off a banner string; validate it is a hex sha before it
-		// becomes a cache-path segment, so a corrupted banner can't escape the cache.
+		// A pin comes off the lock file; validate it is a hex sha before it
+		// becomes a cache-path segment, so a corrupted lock can't escape the cache.
 		if !hexRefRe.MatchString(p) {
 			return "", fmt.Errorf("%w: pinned sha %q for alias %q is not a hex commit sha", ErrResolveRef, p, alias)
 		}
@@ -241,9 +244,11 @@ func (r *Resolver) ensureExtracted(ctx context.Context, sp Spec, sha string) (st
 	if st, err := os.Stat(dir); err == nil && st.IsDir() {
 		return dir, nil
 	}
-	// A sha off a legacy banner may be abbreviated (12-char) while the cache keys on
-	// the full sha, so match a cached commit dir by prefix; an ambiguous prefix is
-	// fatal, and no match falls through to a cold fetch under the given sha.
+	// A caller-supplied pin may be an abbreviated hex sha — resolveSha accepts any
+	// 7-to-40-char hex pin (hexRefRe), e.g. off a hand-edited lock — while the
+	// cache keys on the full sha, so match a cached commit dir by prefix; an
+	// ambiguous prefix is fatal, and no match falls through to a cold fetch under
+	// the given sha.
 	if len(sha) < 40 {
 		hit, err := r.cachePrefixLookup(sp, sha)
 		if err != nil {
@@ -333,7 +338,8 @@ func (r *Resolver) cachePrefixLookup(sp Spec, pin string) (string, error) {
 	return match, nil
 }
 
-// sha12 truncates a sha to the 12-char form recorded in the banner and cache key.
+// sha12 truncates a sha to the 12-char display form Pin returns for piece Origin
+// labels. The lock records the full sha (FullPin), and the cache keys on it.
 func sha12(sha string) string {
 	if len(sha) > 12 {
 		return sha[:12]

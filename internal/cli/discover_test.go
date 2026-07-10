@@ -17,41 +17,6 @@ func mkFile(t *testing.T, root, rel, content string) {
 	}
 }
 
-func TestDiscoverSourcesSkipsDotDirsAndSymlinks(t *testing.T) {
-	root := t.TempDir()
-	mkFile(t, root, "AGENTS.src.md", "a")
-	mkFile(t, root, "sub/install-binary.src.sh", "b")
-	mkFile(t, root, "normal/CLAUDE.src.md", "c")
-	mkFile(t, root, ".hidden/H.src.md", "skip me") // dot-dir: skipped
-	mkFile(t, root, ".git/G.src.md", "skip me")    // dot-dir: skipped
-	mkFile(t, root, "README.md", "not a source")
-	mkFile(t, root, "notes.src.txt", "unsupported ext")
-
-	// A symlinked dir whose target lives outside the root; its sources must never be
-	// discovered (WalkDir does not descend symlinks).
-	external := t.TempDir()
-	if err := os.WriteFile(filepath.Join(external, "E.src.md"), []byte("e"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(external, filepath.Join(root, "linked")); err != nil {
-		t.Skipf("symlink unsupported: %v", err)
-	}
-
-	got, err := discoverSources(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"AGENTS.src.md", "normal/CLAUDE.src.md", "sub/install-binary.src.sh"}
-	if len(got) != len(want) {
-		t.Fatalf("discovered %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("discovered %v, want %v", got, want)
-		}
-	}
-}
-
 func TestDiscoverArtifactDirs(t *testing.T) {
 	root := t.TempDir()
 	mkFile(t, root, ".claude/fragments/AGENTS.md/layout.toml", "fragments=[\"x\"]\n")

@@ -1,11 +1,19 @@
 package guide
 
+import "regexp"
+
 // Name, key, and argument-value validators. These are the single source of truth
 // for the character sets a fragment name, an argument key, and an argument value
-// may use — shared by the v1 directive parser (parse.go) and the v3 layout schema
-// (the layout package). Argument values are substituted verbatim into generated
-// artifacts, so ValidArgValue is deliberately strict: bare tokens only, nothing
-// that could leak a quote, space, or shell metacharacter into the rendered shell.
+// may use, shared by every consumer (the layout schema in the layout package,
+// composition, and the CLI). Argument values are substituted verbatim into
+// generated artifacts, so ValidArgValue is deliberately strict: bare tokens only,
+// nothing that could leak a quote, space, or shell metacharacter into the rendered
+// shell.
+var (
+	nameRe     = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+	keyRe      = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+	argValueRe = regexp.MustCompile(`^[A-Za-z0-9._/@:+-]+$`)
+)
 
 // ValidName reports whether s is a legal fragment name or source alias
 // (^[a-z0-9][a-z0-9-]*$).

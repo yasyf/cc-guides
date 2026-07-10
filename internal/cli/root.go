@@ -59,8 +59,6 @@ func NewRootCmd(ctx context.Context) *cobra.Command {
 	root.AddCommand(
 		newRenderCmd(ctx),
 		newCheckCmd(ctx),
-		newMigrateCmd(ctx),
-		newInitCmd(ctx),
 		newLintCmd(),
 		newListCmd(),
 		newCatCmd(ctx),
@@ -92,8 +90,8 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 }
 
 // repoRoot resolves the repo root from cwd (nearest ancestor with .git), falling
-// back to cwd. All v3 artifact-dir paths are anchored here and stored
-// repo-relative (slash form), so the banner `src=` matches on any machine.
+// back to cwd. All artifact-dir paths are anchored here and stored repo-relative
+// (slash form), so the marker `src=` and lock entries match on any machine.
 func repoRoot() string {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -173,71 +171,26 @@ func discoverArtifactDirs(root string) ([]string, error) {
 	return dirs, nil
 }
 
-// discoverSources walks from repoRoot, skipping dot-dirs and symlinked dirs, and
-// collects every *.src.md / *.src.sh (the transitional v1 sources), repo-relative
-// and sorted.
-func discoverSources(root string) ([]string, error) {
-	var out []string
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if path != root && strings.HasPrefix(d.Name(), ".") {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if d.Type()&fs.ModeSymlink != 0 {
-			return nil
-		}
-		if guide.IsSource(path) {
-			rel, relErr := filepath.Rel(root, path)
-			if relErr != nil {
-				return relErr
-			}
-			out = append(out, filepath.ToSlash(rel))
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	sort.Strings(out)
-	return out, nil
-}
-
-// collectUnits resolves the work items for render/check: the explicit args
-// (classified as v1 sources or v3 artifact dirs) or, with no args, a dual
-// discovery of both.
-func collectUnits(root string, args []string) (v3dirs, v1srcs []string, err error) {
+// collectDirs resolves the artifact dirs for render/check: the explicit args
+// (each must be an artifact dir) or, with no args, a discovery from the repo root.
+func collectDirs(root string, args []string) ([]string, error) {
 	if len(args) == 0 {
-		v3dirs, err = discoverArtifactDirs(root)
-		if err != nil {
-			return nil, nil, err
-		}
-		v1srcs, err = discoverSources(root)
-		return v3dirs, v1srcs, err
+		return discoverArtifactDirs(root)
 	}
+	var dirs []string
 	for _, a := range args {
-		switch {
-		case guide.IsSource(a):
-			v1srcs = append(v1srcs, filepath.ToSlash(a))
-		default:
-			rel := filepath.ToSlash(strings.TrimSuffix(a, "/"))
-			if _, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(rel), "layout.toml")); statErr != nil {
-				return nil, nil, fmt.Errorf("%q is neither a *.src.{md,sh} source nor an artifact dir (no layout.toml)", a)
-			}
-			v3dirs = append(v3dirs, rel)
+		rel := filepath.ToSlash(strings.TrimSuffix(a, "/"))
+		if _, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(rel), "layout.toml")); statErr != nil {
+			return nil, fmt.Errorf("%q is not an artifact dir (no layout.toml)", a)
 		}
+		dirs = append(dirs, rel)
 	}
-	sort.Strings(v3dirs)
-	sort.Strings(v1srcs)
-	return v3dirs, v1srcs, nil
+	sort.Strings(dirs)
+	return dirs, nil
 }
 
-// bannerVersion resolves the effective banner version, warning once on stderr for
-// a dev build.
+// bannerVersion resolves the effective version recorded in the lock, warning once
+// on stderr for a dev build.
 func bannerVersion(override string, stderr io.Writer) string {
 	v := override
 	if v == "" {
@@ -246,7 +199,7 @@ func bannerVersion(override string, stderr io.Writer) string {
 		v = strings.TrimPrefix(v, "v")
 	}
 	if v == "dev" {
-		foutln(stderr, "cc-guides: warning: stamping a 'dev' banner version; artifacts will not match a released build (pass --banner-version or build with -ldflags)")
+		foutln(stderr, "cc-guides: warning: recording a 'dev' version in the lock; artifacts will not match a released build (pass --banner-version or build with -ldflags)")
 	}
 	return v
 }

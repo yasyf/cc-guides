@@ -76,7 +76,7 @@ jobs:
           landed=0
           for attempt in 1 2 3; do
             cc-guides render
-            # Stage everything (-A) so a first-migration's new, untracked lock counts.
+            # Stage everything (-A) so a first render's new, untracked lock counts.
             git add -A -- .
             if git diff --cached --quiet; then
               echo "already current — nothing to commit"
@@ -106,21 +106,13 @@ jobs:
                 break
               fi
             fi
-            # Source pins for the commit message. Prefer the freshly written lock
-            # (alias@sha12); a v1-only repo has no lock, so fall back to the freshly
-            # stamped banner; failing either, omit pins (none). Both extractions are a
-            # single awk over a temp file — no pipe into an early-exit consumer.
-            if [ -f "$lock" ]; then
-              pins="$(awk -F'"' '
-                /^\[sources\./ { alias=$0; sub(/^\[sources\./, "", alias); sub(/\]$/, "", alias) }
-                /^commit = / { printf "%s%s@%s", (n++ ? "," : ""), alias, substr($2, 1, 12) }
-              ' "$lock")"
-            else
-              banners="$(mktemp)"
-              git diff --cached -- . > "$banners"
-              pins="$(awk '/^\+.*fragments=[^ ]+ \| GENERATED/ { s=$0; sub(/^.*fragments=/,"",s); sub(/ \| GENERATED.*/,"",s); print s; exit }' "$banners")"
-              rm -f "$banners"
-            fi
+            # Source pins for the commit message, read from the freshly written lock
+            # (alias@sha12); an import-free layout locks no sources, so omit pins
+            # (none). A single awk over the lock — no pipe into an early-exit consumer.
+            pins="$(awk -F'"' '
+              /^\[sources\./ { alias=$0; sub(/^\[sources\./, "", alias); sub(/\]$/, "", alias) }
+              /^commit = / { printf "%s%s@%s", (n++ ? "," : ""), alias, substr($2, 1, 12) }
+            ' "$lock")"
             git commit -m "chore: re-render guides (cc-guides ${CC_GUIDES_VERSION}, sources ${pins:-none})"
             if git push; then
               pushed=1

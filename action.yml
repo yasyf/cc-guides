@@ -1,17 +1,16 @@
 name: Guides check
 description: >
-  Verify every cc-guides artifact is fresh. A repo with a tracked
-  .claude/fragments/cc-guides.lock installs exactly the lock's cc-guides version
-  and runs one check; an un-migrated repo falls back to installing the version each
-  artifact's banner records (grouped, checksum-verified). Either way a new cc-guides
-  release can never redden this check. Requires the repo to be checked out first
-  (actions/checkout).
+  Verify every cc-guides artifact is fresh. The repo must carry a tracked
+  .claude/fragments/cc-guides.lock; the action installs exactly the lock's
+  cc-guides version (checksum-verified) and runs one check over every artifact, so
+  a new cc-guides release can never redden it. Requires the repo to be checked out
+  first (actions/checkout).
 
 inputs:
   files:
     description: >
-      Optional whitespace-separated list of check targets (layout dirs and/or
-      *.src.* sources). Default: every tracked layout.toml dir and *.src.* source.
+      Optional whitespace-separated list of layout dirs to check. Default: every
+      tracked layout.toml dir.
     required: false
     default: ""
 
@@ -53,114 +52,42 @@ runs:
         }
 
         lock=".claude/fragments/cc-guides.lock"
-        if git ls-files --error-unmatch -- "$lock" >/dev/null 2>&1; then
-          # --- lock-first path (migrated repo) -----------------------------------
-          # The lock pins the render version and every source commit; the action
-          # installs exactly that version and runs one check over all units.
-          # Single awk over the file (exit after the first match) — never a pipe into
-          # head, which SIGPIPEs the producer under pipefail.
-          version="$(awk -F'"' '/^version = / {print $2; exit}' "$lock")"
-          if [ -z "$version" ]; then
-            echo "::error file=$lock::lock has no version — run 'cc-guides render' and commit."
-            exit 1
-          fi
-          if [ "$version" = "dev" ]; then
-            echo "::error file=$lock::lock records a dev build — re-render with a released cc-guides and commit."
-            exit 1
-          fi
-          if grep -qE '^commit = "local"' "$lock"; then
-            echo "::error file=$lock::lock records commit = \"local\" (a dev render off a local source) — re-render against the committed sources and commit."
-            exit 1
-          fi
-          bin="$(install_ccguides "$version")"
-          check_status=0
-          if [ -n "${INPUT_FILES// /}" ]; then
-            # shellcheck disable=SC2206
-            units=($INPUT_FILES)
-            "$bin" check --diff "${units[@]}" || check_status=$?
-          else
-            "$bin" check --diff || check_status=$?
-          fi
-          if [ "$check_status" -ne 0 ]; then
-            echo "::error::stale rendered guides — run 'cc-guides render' locally and commit the sources, artifacts, and lock together."
-            exit 1
-          fi
-          newest="$version"
-        else
-          # --- legacy banner-grouped path (un-migrated repo) ---------------------
-          # Each unit is a check argument: a ".claude/fragments/<target>" layout dir
-          # or an "X.src.{md,sh}" source. Their artifacts are on disk already.
-          units=()
-          if [ -n "${INPUT_FILES// /}" ]; then
-            # shellcheck disable=SC2206
-            units=($INPUT_FILES)
-          else
-            while IFS= read -r lt; do
-              [ -n "$lt" ] && units+=("${lt%/layout.toml}")
-            done < <(git ls-files -- '.claude/fragments/**/layout.toml')
-            while IFS= read -r src; do
-              [ -n "$src" ] && units+=("$src")
-            done < <(git ls-files -- '*.src.md' '*.src.sh')
-          fi
-          if [ "${#units[@]}" -eq 0 ]; then
-            echo "::error::no cc-guides artifacts found — this repo is not migrated to cc-guides." \
-                 " Run 'cc-guides migrate' (see https://github.com/yasyf/cc-guides) or drop this action."
-            exit 1
-          fi
-
-          # Map each unit to its artifact + banner version.
-          # v3 unit ".claude/fragments/<target>" -> artifact "<target>".
-          # v1 unit "X.src.<ext>"                -> artifact "X.<ext>".
-          # Banner core: cc-guides <version> src=<src> [fragments=<f>] | GENERATED
-          declare -A by_version=()
-          for unit in "${units[@]}"; do
-            case "$unit" in
-              .claude/fragments/*) artifact="${unit#.claude/fragments/}" ;;
-              *.src.*)             artifact="${unit%.src.*}.${unit##*.}" ;;
-              *)
-                echo "::error::'$unit' is neither a .claude/fragments layout dir nor a *.src.* source"
-                exit 1
-                ;;
-            esac
-            if [ ! -f "$artifact" ]; then
-              echo "::error file=$unit::rendered artifact '$artifact' is missing — run 'cc-guides render' and commit."
-              exit 1
-            fi
-            # Read the banner fields with a single awk over the artifact's first two
-            # lines (banner on line 1, or line 2 after a shell shebang) — file input
-            # plus exit, never a printf|sed|head pipe that SIGPIPEs under pipefail.
-            version="$(awk 'NR<=2 && /cc-guides [^ ]+ src=[^ ]+.*\| GENERATED/ {s=$0; sub(/^.*cc-guides /,"",s); sub(/ .*/,"",s); print s; exit} NR>2{exit}' "$artifact")"
-            fragments="$(awk 'NR<=2 && /cc-guides [^ ]+ src=[^ ]+ fragments=[^ ]+ \| GENERATED/ {s=$0; sub(/^.*fragments=/,"",s); sub(/ .*/,"",s); print s; exit} NR>2{exit}' "$artifact")"
-            if [ -z "$version" ]; then
-              echo "::error file=$artifact::no cc-guides banner or lock — run 'cc-guides render' and commit."
-              exit 1
-            fi
-            if [ "$version" = "dev" ]; then
-              echo "::error file=$artifact::banner records a dev build — re-render with a released cc-guides and commit."
-              exit 1
-            fi
-            if [ "$fragments" = "local" ]; then
-              echo "::error file=$artifact::banner records 'fragments=local' (a dev render off a local source) — re-render against the committed layout and commit."
-              exit 1
-            fi
-            by_version["$version"]+="$unit"$'\n'
-          done
-
-          # Install each banner version and check its group.
-          failed=0
-          for version in "${!by_version[@]}"; do
-            bin="$(install_ccguides "$version")"
-            mapfile -t group <<< "${by_version[$version]%$'\n'}"
-            if ! "$bin" check --diff "${group[@]}"; then
-              failed=1
-            fi
-          done
-          if [ "$failed" -ne 0 ]; then
-            echo "::error::stale rendered guides — run 'cc-guides render' locally and commit the layout + artifact together."
-            exit 1
-          fi
-          newest="$(printf '%s\n' "${!by_version[@]}" | sort -V | tail -n 1)"
+        if ! git ls-files --error-unmatch -- "$lock" >/dev/null 2>&1; then
+          echo "::error::no tracked $lock — run 'cc-guides render' with cc-guides >= 0.1.13 to create the lock, then commit it (the fragments, the artifacts, and the lock together)."
+          exit 1
         fi
+
+        # The lock pins the render version and every source commit; the action
+        # installs exactly that version and runs one check over all units.
+        # Single awk over the file (exit after the first match) — never a pipe into
+        # head, which SIGPIPEs the producer under pipefail.
+        version="$(awk -F'"' '/^version = / {print $2; exit}' "$lock")"
+        if [ -z "$version" ]; then
+          echo "::error file=$lock::lock has no version — run 'cc-guides render' and commit."
+          exit 1
+        fi
+        if [ "$version" = "dev" ]; then
+          echo "::error file=$lock::lock records a dev build — re-render with a released cc-guides and commit."
+          exit 1
+        fi
+        if grep -qE '^commit = "local"' "$lock"; then
+          echo "::error file=$lock::lock records commit = \"local\" (a dev render off a local source) — re-render against the committed sources and commit."
+          exit 1
+        fi
+        bin="$(install_ccguides "$version")"
+        check_status=0
+        if [ -n "${INPUT_FILES// /}" ]; then
+          # shellcheck disable=SC2206
+          units=($INPUT_FILES)
+          "$bin" check --diff "${units[@]}" || check_status=$?
+        else
+          "$bin" check --diff || check_status=$?
+        fi
+        if [ "$check_status" -ne 0 ]; then
+          echo "::error::stale rendered guides — run 'cc-guides render' locally and commit the fragments, artifacts, and lock together."
+          exit 1
+        fi
+        newest="$version"
 
         # --- non-blocking freshness notice --------------------------------------
         # A newer cc-guides binary no longer forces a fleet refresh: content lives

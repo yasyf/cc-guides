@@ -12,7 +12,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/yasyf/cc-guides/guide"
-	"github.com/yasyf/cc-guides/internal/migrate"
 	"github.com/yasyf/cc-guides/layout"
 	"github.com/yasyf/cc-guides/lockfile"
 	"github.com/yasyf/cc-guides/source"
@@ -30,12 +29,12 @@ func newRenderCmd(ctx context.Context) *cobra.Command {
 	var o renderOpts
 	cmd := &cobra.Command{
 		Use:   "render [paths...]",
-		Short: "Render .claude/fragments/<target>/ artifact dirs (and transitional *.src.* sources) to their artifacts",
+		Short: "Render .claude/fragments/<target>/ artifact dirs to their artifacts",
 		Long: "Compose each .claude/fragments/<target>/ artifact dir into its target,\n" +
-			"expanding local *.fragment.* pieces and imports of shared fragments and\n" +
-			"stamping a GENERATED banner. Transitional *.src.{md,sh} sources still\n" +
-			"render (with a deprecation warning). With no paths, discover both from the\n" +
-			"repo root.",
+			"expanding local *.fragment.* pieces and imports of shared fragments,\n" +
+			"stamping a version-free GENERATED marker (md/sh), and recording every\n" +
+			"source pin in .claude/fragments/cc-guides.lock. With no paths, discover\n" +
+			"every artifact dir from the repo root.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runRender(ctx, cmd, args, o)
 		},
@@ -43,8 +42,8 @@ func newRenderCmd(ctx context.Context) *cobra.Command {
 	f := cmd.Flags()
 	f.BoolVar(&o.stdout, "stdout", false, "write rendered output to stdout instead of files")
 	f.BoolVar(&o.dryRun, "dry-run", false, "report what would be written without writing")
-	f.BoolVar(&o.force, "force", false, "overwrite an artifact even if it carries no cc-guides banner")
-	f.StringVar(&o.banner, "banner-version", "", "override the version stamped into the banner")
+	f.BoolVar(&o.force, "force", false, "overwrite an artifact even if cc-guides does not manage it")
+	f.StringVar(&o.banner, "banner-version", "", "override the version stamped into the lock")
 	f.StringArrayVar(&o.sources, "source", nil, "override a source alias: --source alias=<github:spec|localdir> (repeatable)")
 	return cmd
 }
@@ -58,26 +57,23 @@ func runRender(ctx context.Context, cmd *cobra.Command, args []string, o renderO
 		return exit(2, err)
 	}
 
-	v3dirs, v1srcs, err := collectUnits(root, args)
+	dirs, err := collectDirs(root, args)
 	if err != nil {
 		return exit(2, err)
 	}
-	if len(v3dirs)+len(v1srcs) == 0 {
-		foutln(stderr, "cc-guides: no artifact dirs or *.src.* sources found")
+	if len(dirs) == 0 {
+		foutln(stderr, "cc-guides: no artifact dirs found")
 		return nil
 	}
-	// Preflight the whole batch: an unsafe target (escaping, source-shaped, shared,
-	// or a selected source) must not clobber anything mid-run.
-	if err := preflightTargets(v3dirs, v1srcs); err != nil {
+	// Preflight the whole batch: an unsafe target (escaping the repo, or shared by
+	// two dirs) must not clobber anything mid-run.
+	if err := preflightTargets(dirs); err != nil {
 		return exit(2, err)
 	}
 	// A render with path arguments is scoped (surgical lock merge, shared pins
 	// frozen); a no-argument render is a full, authoritative rebuild.
 	scoped := len(args) > 0
-	if err := renderV3(ctx, cmd, root, v3dirs, overrides, ver, o, scoped); err != nil {
-		return err
-	}
-	return renderV1(ctx, cmd, root, v1srcs, overrides, ver, o)
+	return renderV3(ctx, cmd, root, dirs, overrides, ver, o, scoped)
 }
 
 // renderV3 composes and writes every v3 artifact dir, resolving imports through a
@@ -209,15 +205,12 @@ func scopedPins(scoped bool, existing *lockfile.Lock, specs map[string]string) (
 }
 
 // v3Overwritable reports, per disk content, whether a v3 target is cc-guides
-// managed and so safe to clobber: a marker or legacy banner (md/sh), or membership
-// in the existing lock's artifacts (the only mechanism for pristine json).
+// managed and so safe to clobber: a marker (md/sh), or membership in the existing
+// lock's artifacts (the only mechanism for pristine json).
 func v3Overwritable(ad *artifactDir, lock *lockfile.Lock) func([]byte) bool {
 	return func(disk []byte) bool {
 		if ad.kind != guide.KindJSON {
 			if _, ok := guide.ParseMarker(ad.kind, disk); ok {
-				return true
-			}
-			if _, ok := guide.ParseBanner(ad.kind, disk); ok {
 				return true
 			}
 		}
@@ -252,79 +245,6 @@ func writeLock(root, ver string, rendered []string, usedAliases map[string]bool,
 		return exit(2, err)
 	}
 	return nil
-}
-
-// renderV1 renders the transitional v1 sources, whose {{> name}} directives now
-// resolve against the remote cc-skills source instead of the deleted embed.
-func renderV1(ctx context.Context, cmd *cobra.Command, root string, srcs []string, overrides map[string]string, ver string, o renderOpts) error {
-	if len(srcs) == 0 {
-		return nil
-	}
-	stderr := cmd.ErrOrStderr()
-	foutln(stderr, "cc-guides: warning: rendering v1 *.src.* sources is deprecated — run 'cc-guides migrate' to adopt layout composition; the implicit cc-skills source is v1-only and will be removed")
-
-	resolver, err := newV1Resolver(overrides, nil)
-	if err != nil {
-		return exit(2, err)
-	}
-	for _, src := range srcs {
-		abs := filepath.Join(root, filepath.FromSlash(src))
-		raw, err := os.ReadFile(abs) // #nosec G304 -- render reads the user-named source file by design
-		if err != nil {
-			return exit(2, err)
-		}
-		kind, err := guide.KindForPath(src)
-		if err != nil {
-			return exit(2, err)
-		}
-		doc, err := guide.Parse(raw, kind)
-		if err != nil {
-			return exit(2, fmt.Errorf("%s: %w", src, err))
-		}
-		// v1Chain resolves the cc-skills alias only when the doc has directives, so
-		// a directive-free source renders fully offline (fragments=none).
-		chain, err := v1Chain(ctx, root, doc, kind, resolver)
-		if err != nil {
-			return exit(2, fmt.Errorf("%s: %w", src, err))
-		}
-		body, err := guide.Render(doc, chain)
-		if err != nil {
-			return exit(2, fmt.Errorf("%s: %w", src, err))
-		}
-		artifactRel, err := guide.ArtifactPath(src)
-		if err != nil {
-			return exit(2, err)
-		}
-		pin, _ := resolver.Pin(migrate.CCSkillsAlias)
-		final := guide.AddBanner(kind, ver, src, v1FragmentsString(doc, pin), body)
-		if err := writeArtifact(cmd, root, artifactRel, src, kind, final, v1Overwritable(kind), o); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// v1FragmentsString pins a transitional artifact's banner: the cc-skills sha when
-// the source has directives, else `none`.
-func v1FragmentsString(doc *guide.Doc, pin string) string {
-	for _, n := range doc.Nodes {
-		if n.Include != nil {
-			if pin == "" || pin == source.LocalPin {
-				return source.LocalPin
-			}
-			return migrate.CCSkillsAlias + "@" + pin
-		}
-	}
-	return "none"
-}
-
-// v1Overwritable reports whether a v1 target on disk carries a cc-guides banner —
-// the transitional path's managed-file test.
-func v1Overwritable(kind guide.Kind) func([]byte) bool {
-	return func(disk []byte) bool {
-		_, ok := guide.ParseBanner(kind, disk)
-		return ok
-	}
 }
 
 // writeArtifact writes final to <root>/<target>, honoring --stdout/--dry-run and
@@ -372,49 +292,27 @@ func writeArtifact(cmd *cobra.Command, root, target, srcLabel string, kind guide
 	return nil
 }
 
-// allTargets maps each work item (v3 dir or v1 source) to its target artifact,
-// for the pre-write collision check.
 // preflightTargets validates the whole batch's targets before any write, folding
 // one deterministic error over every unsafe target: one that escapes the repo via
-// "..", one that is itself source-shaped (a v1 X.src.src.md → X.src.md would
-// clobber a source), one that is also a selected source, or one shared by two work
-// items. It carries forward the v1 source/artifact collision preflight.
-func preflightTargets(v3dirs, v1srcs []string) error {
-	targets := map[string]string{}    // work item -> cleaned target
-	byTarget := map[string][]string{} // cleaned target -> work items
-	srcSet := map[string]bool{}       // cleaned selected v1 sources
-	register := func(item, target string) {
-		ct := path.Clean(filepath.ToSlash(target))
-		targets[item] = ct
-		byTarget[ct] = append(byTarget[ct], item)
-	}
-	for _, s := range v1srcs {
-		srcSet[path.Clean(s)] = true
-	}
-	for _, dir := range v3dirs {
+// "..", or one shared by two artifact dirs.
+func preflightTargets(dirs []string) error {
+	targets := map[string]string{}    // dir -> cleaned target
+	byTarget := map[string][]string{} // cleaned target -> dirs
+	for _, dir := range dirs {
 		target, _, err := guide.TargetForLayoutDir(dir)
 		if err != nil {
 			return err
 		}
-		register(dir, target)
-	}
-	for _, s := range v1srcs {
-		target, err := guide.ArtifactPath(s)
-		if err != nil {
-			return err
-		}
-		register("src:"+s, target)
+		ct := path.Clean(filepath.ToSlash(target))
+		targets[dir] = ct
+		byTarget[ct] = append(byTarget[ct], dir)
 	}
 
 	var msgs []string
-	for item, ct := range targets {
+	for dir, ct := range targets {
 		switch {
 		case ct == ".." || strings.HasPrefix(ct, "../") || path.IsAbs(ct):
-			msgs = append(msgs, fmt.Sprintf("%q: target %q escapes the repo root", item, ct))
-		case guide.IsSource(ct):
-			msgs = append(msgs, fmt.Sprintf("%q: target %q is itself a source file", item, ct))
-		case srcSet[ct]:
-			msgs = append(msgs, fmt.Sprintf("%q: target %q is also a selected source", item, ct))
+			msgs = append(msgs, fmt.Sprintf("%q: target %q escapes the repo root", dir, ct))
 		case len(byTarget[ct]) > 1:
 			others := append([]string(nil), byTarget[ct]...)
 			sort.Strings(others)

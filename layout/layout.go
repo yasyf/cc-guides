@@ -195,7 +195,7 @@ func parseRef(ref string, args map[string]string, idx int) (Entry, error) {
 }
 
 // UsedAliases returns the set of source aliases the entries actually import,
-// sorted — the aliases whose pins appear in the banner.
+// sorted — the aliases whose pins appear in the lock.
 func (l *Layout) UsedAliases() []string {
 	seen := map[string]bool{}
 	var out []string
