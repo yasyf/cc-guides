@@ -17,39 +17,11 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Check rendered guides
+    - name: Resolve locked cc-guides version
+      id: lock
       shell: bash
-      env:
-        INPUT_FILES: ${{ inputs.files }}
       run: |
         set -euo pipefail
-
-        os="$(uname -s | tr '[:upper:]' '[:lower:]')"
-        arch="$(uname -m)"
-        case "$arch" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; esac
-        bindir="$(mktemp -d)"
-
-        # install_ccguides <version> — download + checksum-verify into $bindir,
-        # printing the binary path on stdout (diagnostics go to stderr).
-        install_ccguides() {
-          version="$1"
-          bin="$bindir/cc-guides-$version"
-          if [ -x "$bin" ]; then echo "$bin"; return; fi
-          tag="v$version"
-          asset="cc-guides_${os}_${arch}"
-          base="https://github.com/yasyf/cc-guides/releases/download/$tag"
-          echo "installing cc-guides $version ($asset)" >&2
-          curl -fsSL --retry 3 -o "$bin" "$base/$asset"
-          curl -fsSL --retry 3 -o "$bindir/checksums-$version.txt" "$base/checksums.txt"
-          expected="$(awk -v a="$asset" '$2 == a {print $1}' "$bindir/checksums-$version.txt")"
-          actual="$(sha256sum "$bin" | awk '{print $1}')"
-          if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
-            echo "::error::checksum mismatch for $asset at $tag (expected '${expected:-<none>}', got '$actual')"
-            exit 1
-          fi
-          chmod +x "$bin"
-          echo "$bin"
-        }
 
         lock=".claude/fragments/cc-guides.lock"
         if ! git ls-files --error-unmatch -- "$lock" >/dev/null 2>&1; then
@@ -57,10 +29,10 @@ runs:
           exit 1
         fi
 
-        # The lock pins the render version and every source commit; the action
-        # installs exactly that version and runs one check over all units.
-        # Single awk over the file (exit after the first match) — never a pipe into
-        # head, which SIGPIPEs the producer under pipefail.
+        # The lock pins the render version and every source commit; install exactly
+        # that version and check every unit against it. Single awk over the file
+        # (exit after the first match) — never a pipe into head, which SIGPIPEs the
+        # producer under pipefail.
         version="$(awk -F'"' '/^version = / {print $2; exit}' "$lock")"
         if [ -z "$version" ]; then
           echo "::error file=$lock::lock has no version — run 'cc-guides render' and commit."
@@ -74,20 +46,34 @@ runs:
           echo "::error file=$lock::lock records commit = \"local\" (a dev render off a local source) — re-render against the committed sources and commit."
           exit 1
         fi
-        bin="$(install_ccguides "$version")"
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
+    - name: Install locked cc-guides
+      uses: yasyf/cc-guides/install@action-v1
+      with:
+        version: ${{ steps.lock.outputs.version }}
+
+    - name: Check rendered guides
+      shell: bash
+      env:
+        INPUT_FILES: ${{ inputs.files }}
+        LOCK_VERSION: ${{ steps.lock.outputs.version }}
+      run: |
+        set -euo pipefail
+
         check_status=0
         if [ -n "${INPUT_FILES// /}" ]; then
           # shellcheck disable=SC2206
           units=($INPUT_FILES)
-          "$bin" check --diff "${units[@]}" || check_status=$?
+          cc-guides check --diff "${units[@]}" || check_status=$?
         else
-          "$bin" check --diff || check_status=$?
+          cc-guides check --diff || check_status=$?
         fi
         if [ "$check_status" -ne 0 ]; then
           echo "::error::stale rendered guides — run 'cc-guides render' locally and commit the fragments, artifacts, and lock together."
           exit 1
         fi
-        newest="$version"
+        newest="$LOCK_VERSION"
 
         # --- non-blocking freshness notice --------------------------------------
         # A newer cc-guides binary no longer forces a fleet refresh: content lives

@@ -3,8 +3,9 @@ name: Re-render guides
 # Reusable workflow: install the LATEST cc-guides, re-render every artifact, and
 # commit the result — unless the only change is the lock file (a code-only
 # cc-guides release bumps the lock's version/pins but markers are version-free, so
-# every artifact is byte-identical). In that case skip: the committed lock's older
-# version still reproduces the same bytes and checks green under the Guides action.
+# every artifact is byte-identical). In that case `cc-guides ci-render` skips: the
+# committed lock's older version still reproduces the same bytes and checks green
+# under the Guides action.
 #
 # Called from each repo's guides.yml on repository_dispatch (cc-guides-render),
 # schedule, or workflow_dispatch. GITHUB_TOKEN pushes don't retrigger workflows,
@@ -23,111 +24,14 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install latest cc-guides
-        shell: bash
-        run: |
-          set -euo pipefail
-          os="$(uname -s | tr '[:upper:]' '[:lower:]')"
-          arch="$(uname -m)"
-          case "$arch" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; esac
-          # Resolve + download in one retry loop: a concurrent release can expose
-          # the new tag via releases/latest before its assets finish uploading
-          # (404 on download). Re-resolving each attempt also follows a release
-          # that lands mid-loop.
-          asset=""
-          for i in 1 2 3 4 5; do
-            effective="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
-              "https://github.com/yasyf/cc-guides/releases/latest")"
-            tag="${effective##*/tag/}"
-            case "$tag" in v[0-9]*) ;; *) echo "::error::could not resolve latest cc-guides release (got '$effective')"; exit 1 ;; esac
-            asset="cc-guides_${os}_${arch}"
-            base="https://github.com/yasyf/cc-guides/releases/download/$tag"
-            mkdir -p "$RUNNER_TEMP/cc-guides-bin"
-            if curl -fsSL --retry 3 -o "$RUNNER_TEMP/cc-guides-bin/cc-guides" "$base/$asset" \
-               && curl -fsSL --retry 3 -o "$RUNNER_TEMP/checksums.txt" "$base/checksums.txt"; then
-              break
-            fi
-            if [ "$i" = 5 ]; then
-              echo "::error::assets for $tag never became available"
-              exit 1
-            fi
-            echo "assets for $tag not yet available ($i/5) — sleeping 30s"
-            sleep 30
-          done
-          expected="$(awk -v a="$asset" '$2 == a {print $1}' "$RUNNER_TEMP/checksums.txt")"
-          actual="$(sha256sum "$RUNNER_TEMP/cc-guides-bin/cc-guides" | awk '{print $1}')"
-          if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
-            echo "::error::checksum mismatch for $asset at $tag"
-            exit 1
-          fi
-          chmod +x "$RUNNER_TEMP/cc-guides-bin/cc-guides"
-          echo "$RUNNER_TEMP/cc-guides-bin" >> "$GITHUB_PATH"
-          echo "CC_GUIDES_VERSION=${tag#v}" >> "$GITHUB_ENV"
+        uses: yasyf/cc-guides/install@action-v1
+        with:
+          version: latest
 
       - name: Render, diff-gate, commit
         id: commit
         shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          lock=".claude/fragments/cc-guides.lock"
-          pushed=0
-          landed=0
-          for attempt in 1 2 3; do
-            cc-guides render
-            # Stage everything (-A) so a first render's new, untracked lock counts.
-            git add -A -- .
-            if git diff --cached --quiet; then
-              echo "already current — nothing to commit"
-              landed=1
-              break
-            fi
-            if [ "$(git diff --cached --name-only)" = "$lock" ]; then
-              # Lock-only change. Skip (and revert) ONLY if every changed lock line
-              # is a `version = ` or `commit = ` pin: a code-only cc-guides release
-              # moves those but leaves every artifact byte-identical (markers are
-              # version-free), and the committed lock still reproduces them. Any
-              # change to `spec`, `artifacts`, `schema`, or a table header is
-              # semantically required and must commit. Counted with a single awk over
-              # a temp file — never a pipe into an early-exit consumer (grep -q/head),
-              # which SIGPIPEs (141) its producer under pipefail and, negated, would
-              # wrongly skip a required change.
-              lockdiff="$(mktemp)"
-              git diff --cached -U0 -- "$lock" > "$lockdiff"
-              nonpin="$(awk '/^[+-]/ && !/^(\+\+\+|---)/ && !/^[+-](version|commit) = / {n++} END{print n+0}' "$lockdiff")"
-              rm -f "$lockdiff"
-              if [ "$nonpin" -eq 0 ]; then
-                echo "only the lock's version/pins moved and artifacts are byte-identical — skipping commit; the committed lock still checks green"
-                git restore --staged -- .
-                git checkout -- .
-                git clean -fq -- "$lock"
-                landed=1
-                break
-              fi
-            fi
-            # Source pins for the commit message, read from the freshly written lock
-            # (alias@sha12); an import-free layout locks no sources, so omit pins
-            # (none). A single awk over the lock — no pipe into an early-exit consumer.
-            pins="$(awk -F'"' '
-              /^\[sources\./ { alias=$0; sub(/^\[sources\./, "", alias); sub(/\]$/, "", alias) }
-              /^commit = / { printf "%s%s@%s", (n++ ? "," : ""), alias, substr($2, 1, 12) }
-            ' "$lock")"
-            git commit -m "chore: re-render guides (cc-guides ${CC_GUIDES_VERSION}, sources ${pins:-none})"
-            if git push; then
-              pushed=1
-              landed=1
-              break
-            fi
-            echo "push rejected (attempt $attempt) — refetching"
-            git fetch origin
-            git reset --hard "origin/${GITHUB_REF_NAME}"
-          done
-          if [ "$landed" -eq 0 ]; then
-            echo "::error::could not land the re-render after 3 attempts"
-            exit 1
-          fi
-          echo "pushed=$pushed" >> "$GITHUB_OUTPUT"
+        run: cc-guides ci-render
 
       - name: Self-check (only when a commit was pushed)
         if: steps.commit.outputs.pushed == '1'
