@@ -18,11 +18,11 @@ import (
 )
 
 type renderOpts struct {
-	stdout  bool
-	dryRun  bool
-	force   bool
-	banner  string
-	sources []string
+	stdout      bool
+	dryRun      bool
+	force       bool
+	lockVersion string
+	sources     []string
 }
 
 func newRenderCmd(ctx context.Context) *cobra.Command {
@@ -43,7 +43,7 @@ func newRenderCmd(ctx context.Context) *cobra.Command {
 	f.BoolVar(&o.stdout, "stdout", false, "write rendered output to stdout instead of files")
 	f.BoolVar(&o.dryRun, "dry-run", false, "report what would be written without writing")
 	f.BoolVar(&o.force, "force", false, "overwrite an artifact even if cc-guides does not manage it")
-	f.StringVar(&o.banner, "banner-version", "", "override the version stamped into the lock")
+	f.StringVar(&o.lockVersion, "lock-version", "", "override the version stamped into the lock")
 	f.StringArrayVar(&o.sources, "source", nil, "override a source alias: --source alias=<github:spec|localdir> (repeatable)")
 	return cmd
 }
@@ -51,7 +51,7 @@ func newRenderCmd(ctx context.Context) *cobra.Command {
 func runRender(ctx context.Context, cmd *cobra.Command, args []string, o renderOpts) error {
 	stderr := cmd.ErrOrStderr()
 	root := repoRoot()
-	ver := bannerVersion(o.banner, stderr)
+	ver := lockVersion(o.lockVersion, stderr)
 	overrides, err := parseSourceOverrides(o.sources)
 	if err != nil {
 		return exit(2, err)

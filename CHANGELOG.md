@@ -4,7 +4,15 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.17] - 2026-07-11
+
+### Changed (breaking)
+- **`--banner-version` is renamed `--lock-version`.** Its post-v1 meaning is
+  "override the version stamped into the lock"; the banner it was named for no
+  longer exists. Dev/test-only surface — nothing in the fleet, the action, or the
+  re-render workflow passes it — so there is no deprecation alias.
+
+## [0.1.16] - 2026-07-11
 
 The v1 removal release. cc-guides is now lock-only: every consumer carries a
 `.claude/fragments/cc-guides.lock` (the whole fleet already does), and the legacy
@@ -45,5 +53,6 @@ to a lock file, and `.claude/settings.json` becomes a rendered JSON target.
 - **JSON render targets.** A `json` fragment kind deep-merges local and imported JSON fragments (objects recursively, arrays as a structural-equality union, scalars later-wins) into a marker-free artifact — so `.claude/settings.json` can be composed from shared fragments. `lint` validates `json/` fragments as well-formed objects.
 - The `Guides check` action reads the lock (installing exactly its version and refusing a `dev` version or a `local` commit) and falls back to the banner path for un-migrated repos; the re-render workflow skips a lock-only diff.
 
-[Unreleased]: https://github.com/yasyf/cc-guides/commits/main
+[0.1.17]: https://github.com/yasyf/cc-guides/releases/tag/v0.1.17
+[0.1.16]: https://github.com/yasyf/cc-guides/releases/tag/v0.1.16
 [0.1.13]: https://github.com/yasyf/cc-guides/releases/tag/v0.1.13

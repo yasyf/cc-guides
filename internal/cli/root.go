@@ -189,9 +189,9 @@ func collectDirs(root string, args []string) ([]string, error) {
 	return dirs, nil
 }
 
-// bannerVersion resolves the effective version recorded in the lock, warning once
+// lockVersion resolves the effective version recorded in the lock, warning once
 // on stderr for a dev build.
-func bannerVersion(override string, stderr io.Writer) string {
+func lockVersion(override string, stderr io.Writer) string {
 	v := override
 	if v == "" {
 		v = version.Bare()
@@ -199,7 +199,7 @@ func bannerVersion(override string, stderr io.Writer) string {
 		v = strings.TrimPrefix(v, "v")
 	}
 	if v == "dev" {
-		foutln(stderr, "cc-guides: warning: recording a 'dev' version in the lock; artifacts will not match a released build (pass --banner-version or build with -ldflags)")
+		foutln(stderr, "cc-guides: warning: recording a 'dev' version in the lock; artifacts will not match a released build (pass --lock-version or build with -ldflags)")
 	}
 	return v
 }

@@ -140,7 +140,7 @@ func TestCheckSelfPinningCrossVersion(t *testing.T) {
 	fixture := guidesFixture(t)
 	write(t, ".claude/fragments/AGENTS.md/layout.toml", "fragments = [\"cc-skills:ccx\"]\n"+ccSkillsSource)
 
-	if code, _, errout := exec("render", "--banner-version", "9.9.9", "--source", srcFlag(fixture)); code != 0 {
+	if code, _, errout := exec("render", "--lock-version", "9.9.9", "--source", srcFlag(fixture)); code != 0 {
 		t.Fatalf("render exit = %d: %s", code, errout)
 	}
 	disk, _ := os.ReadFile("AGENTS.md")
