@@ -1,5 +1,5 @@
 fragments = [
-  "claude-specific-rules",
+  "cc-skills:claude-rules",
 ]
 
 [sources.cc-skills]
