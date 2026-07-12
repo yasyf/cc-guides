@@ -71,6 +71,16 @@ func runLint(cmd *cobra.Command, dir string) error {
 // not match its kind (md/ vs sh/), is itself a violation.
 func lintFile(root, path string) []string {
 	rel, _ := filepath.Rel(root, path)
+	// README.md is reserved documentation for the pack, never a fragment. At the
+	// pack root it is a legitimate doc and is skipped; anywhere below it (e.g.
+	// md/README.md) it is rejected so it can never be resolved as the fragment
+	// named "README" (source.Resolver reads <dir>/<kind>/<name><ext>).
+	if filepath.Base(rel) == "README.md" {
+		if rel == "README.md" {
+			return nil
+		}
+		return []string{fmt.Sprintf("%s: README.md is reserved documentation, not a fragment", rel)}
+	}
 	kind, err := guide.KindForPath(path)
 	if err != nil {
 		return []string{fmt.Sprintf("%s: unsupported extension (want .md or .sh)", rel)}

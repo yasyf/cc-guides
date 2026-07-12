@@ -314,6 +314,29 @@ func TestLintShellMustHaveShebang(t *testing.T) {
 	}
 }
 
+// A README.md at the pack root is documentation, not a fragment: it must not
+// redden the gate even sitting next to real fragments.
+func TestLintPackRootReadme(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "README.md"), "# The Pack\n\nHumans read this.\n")
+	write(t, filepath.Join(dir, "md", "ok.md"), "## Clean\nbody\n")
+	write(t, filepath.Join(dir, "sh", "ok.sh"), "#!/bin/sh\necho hi\n")
+	if code, _, errout := exec("lint", dir); code != 0 {
+		t.Fatalf("pack-root README lint: code=%d err=%s", code, errout)
+	}
+}
+
+// A README.md below the pack root (e.g. under md/) is rejected so it can never
+// be resolved as the fragment named "README".
+func TestLintReadmeUnderKindDirRejected(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "md", "README.md"), "## Not\nbody\n")
+	code, _, errout := exec("lint", dir)
+	if code != 1 || !strings.Contains(errout, "reserved documentation") {
+		t.Fatalf("md/README.md lint: code=%d err=%q", code, errout)
+	}
+}
+
 func TestCatImportAndLocal(t *testing.T) {
 	repo(t)
 	fixture := guidesFixture(t)
