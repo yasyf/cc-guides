@@ -195,6 +195,24 @@ func TestResolveUnknownNameIsNotFound(t *testing.T) {
 	}
 }
 
+// A traversal-shaped import name must be rejected before it is joined into the
+// fragment path — `cc-guides cat 'x:../README'` once escaped the kind dir up to
+// the pack root via filepath.Join normalization and leaked the pack-root README.
+func TestResolveRejectsTraversalName(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteFixture(t, dir)
+	// A README at the pack root is exactly what `../README` would have reached.
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := newResolver(t, &fixtureFetcher{}, map[string]string{"cc-skills": dir}, nil)
+	for _, name := range []string{"../README", "..", "a/b", "a\\b", ""} {
+		if _, _, err := r.Resolve(context.Background(), "cc-skills", name, guide.KindMD); !errors.Is(err, ErrBadName) {
+			t.Errorf("Resolve name %q err = %v, want ErrBadName", name, err)
+		}
+	}
+}
+
 func TestResolveUnknownAlias(t *testing.T) {
 	r := newResolver(t, &fixtureFetcher{}, map[string]string{}, nil)
 	if _, _, err := r.Resolve(context.Background(), "nope", "x", guide.KindMD); !errors.Is(err, ErrUnknownAlias) {

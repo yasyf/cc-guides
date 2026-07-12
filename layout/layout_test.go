@@ -73,6 +73,7 @@ func TestParseErrors(t *testing.T) {
 		{"empty compose", "[sources.cc-skills]\nsource = \"github:x/y//g\"\n", layout.ErrEmptyCompose},
 		{"bad name uppercase", "fragments = [\"Ccx\"]\n", layout.ErrBadName},
 		{"bad alias", "fragments = [\"BAD:ccx\"]\n", layout.ErrBadName},
+		{"traversal import name", "fragments = [\"cc-skills:../README\"]\n\n[sources.cc-skills]\nsource = \"github:x/y//g\"\n", layout.ErrBadName},
 		{"undeclared alias", "fragments = [\"team:x\"]\n", layout.ErrUndeclaredAlias},
 		{"bad entry type", "fragments = [42]\n", layout.ErrBadEntry},
 		{"table without use", "fragments = [ { args = { a = \"b\" } } ]\n", layout.ErrBadEntry},

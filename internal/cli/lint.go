@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -74,9 +75,13 @@ func lintFile(root, path string) []string {
 	// README.md is reserved documentation for the pack, never a fragment. At the
 	// pack root it is a legitimate doc and is skipped; anywhere below it (e.g.
 	// md/README.md) it is rejected so it can never be resolved as the fragment
-	// named "README" (source.Resolver reads <dir>/<kind>/<name><ext>).
-	if filepath.Base(rel) == "README.md" {
-		if rel == "README.md" {
+	// named "README" (source.Resolver reads <dir>/<kind>/<name><ext>). The name is
+	// matched case-insensitively — README.MD / readme.md and friends must hit the
+	// reservation too, so a case-insensitive filesystem can't smuggle a resolvable
+	// readme into a kind dir. Only a genuine pack-root README (no directory
+	// component, any case) is exempt.
+	if strings.EqualFold(filepath.Base(rel), "README.md") {
+		if filepath.Dir(rel) == "." {
 			return nil
 		}
 		return []string{fmt.Sprintf("%s: README.md is reserved documentation, not a fragment", rel)}
@@ -85,8 +90,13 @@ func lintFile(root, path string) []string {
 	if err != nil {
 		return []string{fmt.Sprintf("%s: unsupported extension (want .md or .sh)", rel)}
 	}
-	if parent := filepath.Base(filepath.Dir(path)); parent != kind.String() {
-		return []string{fmt.Sprintf("%s: a %s fragment must live under a %s/ subdir, not %s/", rel, kind, kind, parent)}
+	// The resolver reads a fragment ONLY at <pack>/<kind>/<name><ext>, so a kind
+	// dir must sit directly under the pack root: a fragment's path relative to the
+	// root must be exactly <kind>/<file>. A file at the root, or nested any deeper
+	// (e.g. nested/json/x.json), is unreachable and rejected — a stricter check
+	// than merely matching the immediate parent dir name.
+	if dir := filepath.Dir(rel); dir != kind.String() {
+		return []string{fmt.Sprintf("%s: a %s fragment must live at %s/<name>%s directly under the pack root, not %s/", rel, kind, kind, kind.Ext(), dir)}
 	}
 	body, readErr := os.ReadFile(path) // #nosec G304 -- lint reads the user-named content dir
 	if readErr != nil {

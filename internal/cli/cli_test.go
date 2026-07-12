@@ -337,6 +337,40 @@ func TestLintReadmeUnderKindDirRejected(t *testing.T) {
 	}
 }
 
+// The README reservation is case-folded: a case variant in a kind dir (which a
+// case-insensitive filesystem could resolve as the fragment named "README") is
+// rejected, while a case variant at the pack root stays exempt documentation.
+func TestLintReadmeCaseFold(t *testing.T) {
+	for _, name := range []string{"README.MD", "readme.md"} {
+		dir := t.TempDir()
+		write(t, filepath.Join(dir, "md", name), "## Not\nbody\n")
+		code, _, errout := exec("lint", dir)
+		if code != 1 || !strings.Contains(errout, "reserved documentation") {
+			t.Fatalf("md/%s lint: code=%d err=%q", name, code, errout)
+		}
+		// The same case variant at the pack root is legitimate documentation.
+		rootDir := t.TempDir()
+		write(t, filepath.Join(rootDir, name), "# The Pack\n\nHumans read this.\n")
+		write(t, filepath.Join(rootDir, "md", "ok.md"), "## Clean\nbody\n")
+		if code, _, errout := exec("lint", rootDir); code != 0 {
+			t.Fatalf("pack-root %s lint: code=%d err=%s", name, code, errout)
+		}
+	}
+}
+
+// A kind dir must sit DIRECTLY under the pack root. A nested kind dir (e.g.
+// nested/json/x.json) lints green under a naive immediate-parent check yet is
+// unreachable — the resolver only reads <pack>/<kind>/<name><ext> — so it is
+// rejected.
+func TestLintNestedKindDirRejected(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "nested", "json", "settings-base.json"), "{\"a\": 1}\n")
+	code, _, errout := exec("lint", dir)
+	if code != 1 || !strings.Contains(errout, "directly under the pack root") {
+		t.Fatalf("nested kind dir lint: code=%d err=%q", code, errout)
+	}
+}
+
 func TestCatImportAndLocal(t *testing.T) {
 	repo(t)
 	fixture := guidesFixture(t)
@@ -352,6 +386,22 @@ func TestCatImportAndLocal(t *testing.T) {
 	}
 	if code, _, _ := exec("cat", "--source", srcFlag(fixture), "cc-skills:nonesuch"); code != 2 {
 		t.Fatalf("unknown import exit = %d, want 2", code)
+	}
+}
+
+// cat must refuse a traversal-shaped import name: `cc-skills:../README` once
+// escaped the kind dir via filepath.Join normalization and printed the pack-root
+// README instead of erroring.
+func TestCatImportRejectsTraversalName(t *testing.T) {
+	repo(t)
+	fixture := guidesFixture(t)
+	write(t, filepath.Join(fixture, "README.md"), "secret pack readme\n")
+	code, out, errout := exec("cat", "--source", srcFlag(fixture), "cc-skills:../README")
+	if code != 2 {
+		t.Fatalf("traversal import exit = %d, want 2 (err=%q)", code, errout)
+	}
+	if strings.Contains(out, "secret") {
+		t.Fatalf("traversal import leaked the pack-root README: %q", out)
 	}
 }
 

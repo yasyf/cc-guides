@@ -8,6 +8,10 @@ var (
 	ErrBadSpec = errors.New("invalid source spec")
 	// ErrUnknownAlias is an import whose alias no source declares.
 	ErrUnknownAlias = errors.New("unknown source alias")
+	// ErrBadName is an import fragment name that is not a bare ^[a-z0-9][a-z0-9-]*$
+	// token — e.g. one carrying a path separator, "..", or empty — which could
+	// traverse out of the kind dir once joined into the fragment path.
+	ErrBadName = errors.New("invalid import fragment name")
 	// ErrResolveRef is a failure to resolve a ref to a commit sha via git ls-remote.
 	ErrResolveRef = errors.New("could not resolve source ref")
 	// ErrFetch is a failure to fetch or extract a source tarball.

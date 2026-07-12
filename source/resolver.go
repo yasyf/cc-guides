@@ -109,6 +109,15 @@ func New(opts Options) (*Resolver, error) {
 
 // Resolve implements Importer.
 func (r *Resolver) Resolve(ctx context.Context, alias, name string, kind guide.Kind) ([]byte, bool, error) {
+	// The name is joined into the fragment path (<dir>/<kind>/<name><ext>), so a
+	// name carrying a path separator or ".." would traverse out of the kind dir
+	// (e.g. `cat 'x:../README'` escaping up to the pack root via filepath.Join
+	// normalization). Reject anything that is not a bare name token. This mirrors
+	// the layout parser's guide.ValidName gate (parseRef), so a direct `cat` import
+	// is refused exactly like a malicious layout import.
+	if !guide.ValidName(name) {
+		return nil, false, fmt.Errorf("%w: %q", ErrBadName, name)
+	}
 	src, err := r.source(ctx, alias)
 	if err != nil {
 		return nil, false, err
