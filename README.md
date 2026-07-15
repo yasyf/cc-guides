@@ -109,7 +109,7 @@ Commit the lock alongside the artifacts. From then on a new cc-guides release re
 
 ## Composition
 
-An artifact dir is any directory under `.claude/fragments/` that holds a `layout.toml`, and its path below that root is the target it renders. `.claude/fragments/AGENTS.md/` renders `AGENTS.md`; a nested path renders a nested target. The kind — Markdown, shell comment style, or JSON — comes from the target extension. A JSON target deep-merges its pieces (arrays concatenate, objects merge) and carries no marker; the lock is its only drift record.
+An artifact dir is any directory under `.claude/fragments/` that holds a `layout.toml`, and its path below that root is the target it renders. `.claude/fragments/AGENTS.md/` renders `AGENTS.md`; a nested path renders a nested target. The kind — Markdown, shell comment style, JSON, or YAML — comes from the target extension. A JSON target deep-merges its pieces (arrays concatenate, objects merge) and carries no marker; the lock is its only drift record. A YAML target concatenates its pieces like Markdown (never a semantic merge, so load-bearing comments survive) and carries a `#`-comment marker.
 
 `layout.toml` is an ordered, heterogeneous `fragments` array. The array comes first, before any `[sources.*]` table: a top-level key written after a table header nests inside that table, and the binary hard-errors on that shape instead of composing empty.
 

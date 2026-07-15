@@ -26,6 +26,23 @@ func TestComposeJoining(t *testing.T) {
 	}
 }
 
+// A yaml artifact concatenates like md/sh (one blank line between pieces, not a
+// semantic merge), so load-bearing comments survive verbatim.
+func TestComposeYAML(t *testing.T) {
+	pieces := []guide.Piece{
+		{Body: []byte("# a load-bearing comment\nname: Docs\non: push\n"), Origin: "head.yml"},
+		{Body: []byte("jobs:\n  build:\n    runs-on: ubuntu-latest\n"), Origin: "jobs.yml"},
+	}
+	got, err := guide.Compose(guide.KindYAML, pieces)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# a load-bearing comment\nname: Docs\non: push\n\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+	if string(got) != want {
+		t.Fatalf("yaml compose =\n%q\nwant\n%q", got, want)
+	}
+}
+
 func TestComposeShebangFirstOnly(t *testing.T) {
 	ok := []guide.Piece{
 		{Body: []byte("#!/bin/sh\nset -e\n"), Origin: "sh1"},

@@ -33,7 +33,7 @@ func MarkerLine(kind Kind, srcDir string) string {
 	switch kind {
 	case KindMD:
 		return "<!-- " + core + " -->"
-	case KindSH:
+	case KindSH, KindYAML:
 		return "# " + core
 	default:
 		return core
@@ -110,7 +110,7 @@ func matchMarkerLine(kind Kind, line string) (MarkerInfo, bool) {
 		if !strings.HasPrefix(line, "<!--") {
 			return MarkerInfo{}, false
 		}
-	case KindSH:
+	case KindSH, KindYAML:
 		if !strings.HasPrefix(line, "# ") {
 			return MarkerInfo{}, false
 		}

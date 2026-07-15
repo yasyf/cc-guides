@@ -18,11 +18,13 @@ const (
 	KindSH
 	// KindJSON is a JSON artifact (deep-merged, no comment marker).
 	KindJSON
+	// KindYAML is a YAML artifact (`# …` comments, ordered text concatenation).
+	KindYAML
 )
 
 // AllKinds enumerates every supported kind; used to probe the alternate kind when
 // building a kind-mismatch diagnostic.
-var AllKinds = []Kind{KindMD, KindSH, KindJSON}
+var AllKinds = []Kind{KindMD, KindSH, KindJSON, KindYAML}
 
 // String returns the short name used in TSV output, the kind subdir, and diagnostics.
 func (k Kind) String() string {
@@ -33,6 +35,8 @@ func (k Kind) String() string {
 		return "sh"
 	case KindJSON:
 		return "json"
+	case KindYAML:
+		return "yml"
 	default:
 		return "unknown"
 	}
@@ -47,6 +51,8 @@ func (k Kind) Ext() string {
 		return ".sh"
 	case KindJSON:
 		return ".json"
+	case KindYAML:
+		return ".yml"
 	default:
 		return ""
 	}
@@ -61,8 +67,10 @@ func KindFromExt(ext string) (Kind, error) {
 		return KindSH, nil
 	case ".json":
 		return KindJSON, nil
+	case ".yml":
+		return KindYAML, nil
 	default:
-		return 0, fmt.Errorf("%w: %q (supported: .md, .sh, .json)", ErrUnknownExt, ext)
+		return 0, fmt.Errorf("%w: %q (supported: .md, .sh, .json, .yml)", ErrUnknownExt, ext)
 	}
 }
 

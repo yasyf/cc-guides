@@ -21,12 +21,12 @@ var lowerTokenRe = regexp.MustCompile(`\{\{[a-z][a-z0-9-]*\}\}`)
 func newLintCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "lint <dir>",
-		Short: "Check a shared-fragments dir for purity (LF, single trailing newline, kind, sh shebang, json object)",
+		Short: "Check a shared-fragments dir for purity (LF, single trailing newline, kind, sh shebang, json object, yaml validity)",
 		Long: "Verify every fragment under <dir> (e.g. a content repo's guides/) is pure:\n" +
 			"LF-only, exactly one trailing newline, non-empty, an extension matching its\n" +
 			"kind subdir, markdown token-free, shell fragments carrying a shebang and no\n" +
-			"leftover mustache markers, and json fragments a well-formed object (tokens\n" +
-			"allowed). Exit 1 on any violation.",
+			"leftover mustache markers, json fragments a well-formed object, and yaml\n" +
+			"fragments well-formed YAML (tokens allowed in both). Exit 1 on any violation.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runLint(cmd, args[0])
@@ -88,7 +88,7 @@ func lintFile(root, path string) []string {
 	}
 	kind, err := guide.KindForPath(path)
 	if err != nil {
-		return []string{fmt.Sprintf("%s: unsupported extension (want .md or .sh)", rel)}
+		return []string{fmt.Sprintf("%s: unsupported extension (want .md, .sh, .json, or .yml)", rel)}
 	}
 	// The resolver reads a fragment ONLY at <pack>/<kind>/<name><ext>, so a kind
 	// dir must sit directly under the pack root: a fragment's path relative to the
@@ -131,6 +131,10 @@ func lintFile(root, path string) []string {
 		}
 	case guide.KindJSON:
 		if err := guide.LintJSON(body); err != nil {
+			add(err.Error())
+		}
+	case guide.KindYAML:
+		if err := guide.LintYAML(body); err != nil {
 			add(err.Error())
 		}
 	}

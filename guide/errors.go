@@ -41,4 +41,7 @@ var (
 
 	// ErrJSONNotObject is a JSON fragment whose root value is not an object.
 	ErrJSONNotObject = errors.New("JSON fragment root must be an object")
+
+	// ErrYAMLParse is a YAML fragment that is not well-formed YAML.
+	ErrYAMLParse = errors.New("invalid YAML fragment")
 )
