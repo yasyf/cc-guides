@@ -67,10 +67,10 @@ func KindFromExt(ext string) (Kind, error) {
 		return KindSH, nil
 	case ".json":
 		return KindJSON, nil
-	case ".yml":
+	case ".yml", ".yaml":
 		return KindYAML, nil
 	default:
-		return 0, fmt.Errorf("%w: %q (supported: .md, .sh, .json, .yml)", ErrUnknownExt, ext)
+		return 0, fmt.Errorf("%w: %q (supported: .md, .sh, .json, .yml, .yaml)", ErrUnknownExt, ext)
 	}
 }
 

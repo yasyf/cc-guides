@@ -18,6 +18,7 @@ func TestTargetForLayoutDir(t *testing.T) {
 		{dir: ".claude/fragments/CLAUDE.md", want: "CLAUDE.md"},
 		{dir: ".claude/fragments/great-docs.yml", want: "great-docs.yml"},
 		{dir: ".claude/fragments/.github/workflows/docs.yml", want: ".github/workflows/docs.yml"}, // nested yml target
+		{dir: ".claude/fragments/.pre-commit-config.yaml", want: ".pre-commit-config.yaml"},       // root dotfile .yaml target
 		{dir: "AGENTS.md", wantErr: true},                                                         // not under the fragments root
 		{dir: ".claude/fragments/notes.txt", wantErr: true},                                       // unsupported extension
 		{dir: ".claude/fragments/../../etc/passwd.md", wantErr: true},                             // escapes via ..
@@ -50,6 +51,11 @@ func TestKindFromExt(t *testing.T) {
 	}
 	if _, err := guide.KindFromExt(".yml"); err != nil {
 		t.Errorf(".yml: %v", err)
+	}
+	if k, err := guide.KindFromExt(".yaml"); err != nil {
+		t.Errorf(".yaml: %v", err)
+	} else if k != guide.KindYAML {
+		t.Errorf(".yaml = %v, want KindYAML", k)
 	}
 	_, err := guide.KindFromExt(".txt")
 	if err == nil {
