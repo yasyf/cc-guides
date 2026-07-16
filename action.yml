@@ -1,10 +1,12 @@
 name: Guides check
 description: >
-  Verify every cc-guides artifact is fresh. The repo must carry a tracked
-  .claude/fragments/cc-guides.lock; the action installs exactly the lock's
-  cc-guides version (checksum-verified) and runs one check over every artifact, so
-  a new cc-guides release can never redden it. Requires the repo to be checked out
-  first (actions/checkout).
+  Verify every cc-guides artifact is fresh. Drift is non-blocking — a stale
+  artifact emits a warning and the daily re-render heals it within 24h — while
+  a broken setup (missing, dev, or local lock) still fails. The repo must carry
+  a tracked .claude/fragments/cc-guides.lock; the action installs exactly the
+  lock's cc-guides version (checksum-verified) and runs one check over every
+  artifact, so a new cc-guides release can never redden it. Requires the repo
+  to be checked out first (actions/checkout).
 
 inputs:
   files:
@@ -69,9 +71,16 @@ runs:
         else
           cc-guides check --diff || check_status=$?
         fi
-        if [ "$check_status" -ne 0 ]; then
-          echo "::error::stale rendered guides — run 'cc-guides render' locally and commit the fragments, artifacts, and lock together."
-          exit 1
+        if [ "$check_status" -ge 2 ]; then
+          echo "::error::cc-guides check could not run — the layouts, lock, and fragments disagree; run 'cc-guides render' locally and commit the fragments, artifacts, and lock together."
+          exit "$check_status"
+        fi
+        if [ "$check_status" -eq 1 ]; then
+          echo "::warning::stale rendered guides — non-blocking: the daily re-render heals this within 24h (or run the Guides workflow via workflow_dispatch now). If a rendered artifact was hand-edited, port the edit into .claude/fragments/ and run 'cc-guides render' — the re-render will otherwise revert it."
+          {
+            echo "### Stale rendered guides (non-blocking)"
+            echo "The daily re-render heals this within 24h — run the Guides workflow via workflow_dispatch to heal it now. If a rendered artifact was hand-edited, port the edit into \`.claude/fragments/\` and run \`cc-guides render\`; the re-render will otherwise revert it."
+          } >> "$GITHUB_STEP_SUMMARY"
         fi
         newest="$LOCK_VERSION"
 

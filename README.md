@@ -1,6 +1,6 @@
 # ![cc-guides](docs/assets/readme-banner.webp)
 
-**Write the prose you own; import the guides you share.** cc-guides composes `AGENTS.md`, `CLAUDE.md`, and shell scripts from local fragments and shared guides pulled in by reference, and `cc-guides check` fails CI the moment an artifact drifts.
+**Write the prose you own; import the guides you share.** cc-guides composes `AGENTS.md`, `CLAUDE.md`, and shell scripts from local fragments and shared guides pulled in by reference, and `cc-guides check` catches drift the moment an artifact diverges — surfaced in CI as a non-blocking warning the daily re-render heals.
 
 [![Release](https://img.shields.io/github/v/release/yasyf/cc-guides?sort=semver)](https://github.com/yasyf/cc-guides/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/yasyf/cc-guides/ci.yml?branch=main&label=ci)](https://github.com/yasyf/cc-guides/actions/workflows/ci.yml)
@@ -57,9 +57,9 @@ Install cc-guides (`brew install yasyf/tap/cc-guides`). Give AGENTS.md a
 
 ## Use cases
 
-### Fail CI when an artifact drifts
+### Catch drift in CI
 
-An artifact edited by hand, or left stale after a shared guide changed, should redden the build. `check` re-composes each target in memory — pinned to the commits the lock records — and byte-compares against disk:
+An artifact edited by hand, or left stale after a shared guide changed, should surface — and heal — without blocking unrelated work. `check` re-composes each target in memory — pinned to the commits the lock records — and byte-compares against disk:
 
 ```console
 $ cc-guides check
@@ -72,14 +72,14 @@ $ echo "exit: $?"
 exit: 1
 ```
 
-`OK`, `STALE`, and `MISSING` go to stdout as TSV; exit 1 signals drift, 2 an invalid layout. In GitHub Actions, one step gates every artifact:
+`OK`, `STALE`, and `MISSING` go to stdout as TSV; exit 1 signals drift, 2 an invalid layout. In GitHub Actions, one step checks every artifact:
 
 ```yaml
 - uses: actions/checkout@v7
 - uses: yasyf/cc-guides@action-v1
 ```
 
-The action installs the exact cc-guides version the lock records, so a new release never reddens a repo that has not re-rendered yet.
+The action installs the exact cc-guides version the lock records, so a new release never reddens a repo that has not re-rendered yet. Drift comes back as a non-blocking warning — the daily re-render heals it — while a broken setup (missing, dev, or local lock) still fails the run.
 
 ### Keep one repo's spin on a shared guide
 
