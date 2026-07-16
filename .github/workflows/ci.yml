@@ -60,3 +60,39 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
+
+  capt-hook-manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: capt-hook pack manifests agree and stay frozen
+        run: |
+          python3 - <<'PY'
+          import sys, tomllib
+
+          root = tomllib.load(open(".claude/capt-hook.toml", "rb"))
+          plugin = tomllib.load(open("plugin/hooks/capt-hook.toml", "rb"))
+          for key in ("name", "version", "description"):
+              if root.get(key) != plugin.get(key):
+                  sys.exit(
+                      f"capt-hook manifest {key} skew: .claude/capt-hook.toml={root.get(key)!r} "
+                      f"!= plugin/hooks/capt-hook.toml={plugin.get(key)!r}"
+                  )
+          if root["version"] != "0.0.0":
+              sys.exit(f"capt-hook manifest version must stay frozen at 0.0.0, got {root['version']!r}")
+          print(f"ok: both capt-hook manifests agree (name={root['name']!r}, version={root['version']!r})")
+          PY
+
+  capt-hook-pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          python-version: "3.13"
+      - name: pack lint (attach-only contract)
+        run: uvx --isolated --python 3.13 "capt-hook==9.15.0" pack lint plugin
+      - name: capt-hook hook tests
+        run: |
+          EMPTY="$(mktemp -d)"
+          uvx --isolated --python 3.13 "capt-hook==9.15.0" --root "$EMPTY" --hooks plugin/hooks test

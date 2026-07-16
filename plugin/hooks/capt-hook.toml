@@ -1,0 +1,4 @@
+name = "cc-guides"
+version = "0.0.0"
+description = "cc-guides rendered-artifact guard — block a direct edit to a cc-guides-rendered artifact, steering to the fragments + `cc-guides render` flow"
+hooks = "."

@@ -1,3 +1,6 @@
+[packs.cc-guides]
+source = "github:yasyf/cc-guides@latest"
+
 [packs.fixes]
 
 [packs.general]

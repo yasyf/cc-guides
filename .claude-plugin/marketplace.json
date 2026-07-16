@@ -1,0 +1,26 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "cc-guides",
+  "description": "cc-guides rendered-artifact guard — a capt-hook pack that blocks direct edits to cc-guides-rendered artifacts, steering to the fragments + `cc-guides render` flow.",
+  "owner": {
+    "name": "yasyf"
+  },
+  "allowCrossMarketplaceDependenciesOn": ["captain-hook"],
+  "plugins": [
+    {
+      "name": "cc-guides",
+      "source": "./plugin",
+      "description": "cc-guides rendered-artifact guard — a capt-hook pack that blocks direct edits to cc-guides-rendered artifacts, steering to the fragments + `cc-guides render` flow.",
+      "category": "development",
+      "tags": [
+        "hooks",
+        "cc-guides",
+        "render",
+        "guardrail"
+      ],
+      "author": {
+        "name": "yasyf"
+      }
+    }
+  ]
+}
