@@ -1,6 +1,6 @@
 {
   "name": "cc-guides",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "cc-guides rendered-artifact guard — a capt-hook pack that blocks direct edits to cc-guides-rendered artifacts, steering to the fragments + `cc-guides render` flow.",
   "author": {
     "name": "Yasyf Mohamedali",
