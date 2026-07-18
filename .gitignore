@@ -29,3 +29,4 @@ coverage.txt
 
 # bootstrap verify binary smoke test
 .go-smoke/
+.zig-cache/
