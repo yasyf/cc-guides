@@ -169,6 +169,47 @@ func TestComposeTOMLTableFirst(t *testing.T) {
 	if _, err := guide.Compose(guide.KindTOML, []guide.Piece{tableSecond, vtabSecond}); !errors.Is(err, guide.ErrTOMLRootKey) {
 		t.Fatalf("a vertical-tab-indented header must fail with ErrTOMLRootKey, got %v", err)
 	}
+	cases := []struct {
+		name    string
+		second  guide.Piece
+		want    string
+		wantErr error
+	}{
+		// Accepted delta: a malformed non-first fragment fails ErrTOMLRootKey at the
+		// opener — before decode, and before any token-mismatch error.
+		{
+			name:    "malformed fragment",
+			second:  guide.Piece{Body: []byte("[not closed\n"), Origin: "broken.toml"},
+			wantErr: guide.ErrTOMLRootKey,
+		},
+		{
+			name: "tokenized opener",
+			second: guide.Piece{
+				Body:   []byte("[packs.{{name}}]\nsource = \"x\"\n"),
+				Args:   map[string]string{"name": "templated"},
+				Keys:   []string{"name"},
+				Origin: "token.toml",
+			},
+			want: "[packs.go]\nsource = \"builtin\"\n\n[packs.templated]\nsource = \"x\"\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := guide.Compose(guide.KindTOML, []guide.Piece{tableSecond, tc.second})
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("err = %v, want %v", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("compose = %q, want %q", got, tc.want)
+			}
+		})
+	}
 }
 
 // STEWARDSHIP: a `%YAML 1.2` directive fragment that old render accepted is now rejected

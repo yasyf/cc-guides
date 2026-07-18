@@ -14,7 +14,7 @@ import (
 // here with a message naming the offending key.
 func LintTOML(body []byte) error {
 	var v map[string]any
-	if _, err := toml.Decode(string(tomlNeutralize(body)), &v); err != nil {
+	if _, err := toml.Decode(string(neutralizeDistinctInt(body)), &v); err != nil {
 		return fmt.Errorf("%w: %w", ErrTOMLDecode, err)
 	}
 	return nil

@@ -24,9 +24,9 @@ func argPiece(body string, args map[string]string) guide.Piece {
 
 func composeJSON(t *testing.T, pieces ...guide.Piece) string {
 	t.Helper()
-	out, err := guide.ComposeJSON(pieces)
+	out, err := guide.Compose(guide.KindJSON, pieces)
 	if err != nil {
-		t.Fatalf("ComposeJSON: %v", err)
+		t.Fatalf("Compose: %v", err)
 	}
 	return string(out)
 }
@@ -99,13 +99,13 @@ func TestComposeJSONNoHTMLEscape(t *testing.T) {
 }
 
 func TestComposeJSONErrors(t *testing.T) {
-	if _, err := guide.ComposeJSON([]guide.Piece{jp(`[1, 2]`)}); !errors.Is(err, guide.ErrJSONNotObject) {
+	if _, err := guide.Compose(guide.KindJSON, []guide.Piece{jp(`[1, 2]`)}); !errors.Is(err, guide.ErrJSONNotObject) {
 		t.Fatalf("array root err = %v, want ErrJSONNotObject", err)
 	}
-	if _, err := guide.ComposeJSON([]guide.Piece{jp(`{"a": 1} garbage`)}); !errors.Is(err, guide.ErrJSONParse) {
+	if _, err := guide.Compose(guide.KindJSON, []guide.Piece{jp(`{"a": 1} garbage`)}); !errors.Is(err, guide.ErrJSONParse) {
 		t.Fatalf("trailing-data err = %v, want ErrJSONParse", err)
 	}
-	if _, err := guide.ComposeJSON([]guide.Piece{jp("{\"a\": 1}\r\n")}); !errors.Is(err, guide.ErrCRLF) {
+	if _, err := guide.Compose(guide.KindJSON, []guide.Piece{jp("{\"a\": 1}\r\n")}); !errors.Is(err, guide.ErrCRLF) {
 		t.Fatalf("CRLF err = %v, want ErrCRLF", err)
 	}
 }
@@ -117,11 +117,11 @@ func TestComposeJSONTokens(t *testing.T) {
 		t.Fatalf("token substitution: %q", got)
 	}
 	// A missing token arg is a hard error.
-	if _, err := guide.ComposeJSON([]guide.Piece{argPiece(`{"a": "{{missing}}"}`, map[string]string{})}); !errors.Is(err, guide.ErrTokenNoArg) {
+	if _, err := guide.Compose(guide.KindJSON, []guide.Piece{argPiece(`{"a": "{{missing}}"}`, map[string]string{})}); !errors.Is(err, guide.ErrTokenNoArg) {
 		t.Fatalf("missing-arg err = %v, want ErrTokenNoArg", err)
 	}
 	// An unused arg is a hard error.
-	if _, err := guide.ComposeJSON([]guide.Piece{argPiece(`{"a": 1}`, map[string]string{"unused": "x"})}); !errors.Is(err, guide.ErrArgUnused) {
+	if _, err := guide.Compose(guide.KindJSON, []guide.Piece{argPiece(`{"a": 1}`, map[string]string{"unused": "x"})}); !errors.Is(err, guide.ErrArgUnused) {
 		t.Fatalf("unused-arg err = %v, want ErrArgUnused", err)
 	}
 	// A nil-Args piece is never scanned: a literal {{x}} inside a string survives.

@@ -15,15 +15,40 @@ import (
 	tsjson "github.com/tree-sitter/tree-sitter-json/bindings/go"
 )
 
-// composeStrategy selects how an artifact's pieces combine.
-type composeStrategy int
+// category selects how an artifact's pieces combine.
+type category int
 
 const (
-	// strategyAppend concatenates pieces with blank-line joins (md/sh/yml).
-	strategyAppend composeStrategy = iota
-	// strategyMerge deep-merges pieces through the order-preserving JSON codec.
-	strategyMerge
+	// catAppend concatenates pieces with blank-line joins, honoring an optional opener
+	// constraint (md/sh/yml/toml).
+	catAppend category = iota
+	// catMerge deep-merges pieces through the kind's codec into one ordered tree (json).
+	catMerge
 )
+
+// neutralizer rewrites a fragment body's {{token}} placeholders into parseable
+// stand-ins before a grammar or opener check parses it.
+type neutralizer func([]byte) []byte
+
+// grammar pairs a tree-sitter language with the sentinel its parse failure wraps.
+type grammar struct {
+	lang unsafe.Pointer
+	wrap error
+}
+
+// codec is a merge kind's format bridge: a strict single-object-root parse into the
+// order-preserving tree and a canonical re-encode ending in one newline.
+type codec interface {
+	parse([]byte) (treeValue, error)
+	encode(treeValue) ([]byte, error)
+}
+
+// openerConstraint requires every append fragment after the first to open with one of
+// the accepted CST node kinds; a violation wraps the sentinel. It requires a grammar.
+type openerConstraint struct {
+	kinds []string
+	wrap  error
+}
 
 // commentSyntax describes how a kind wraps the generated marker line. An empty
 // open marks the kind markerless: it stamps no marker, so its managed-ness is
@@ -41,20 +66,20 @@ func (c commentSyntax) markered() bool { return c.open != "" }
 // one spec per Kind. Adding a language is a new Kind constant plus one spec entry,
 // not a new branch in every kind-aware switch.
 type spec struct {
-	name      string
-	exts      []string // accepted extensions, primary first (yml also accepts .yaml)
-	strategy  composeStrategy
-	comment   commentSyntax
-	shebang   bool        // marker follows a leading shebang; new files are executable
-	newMode   os.FileMode // mode for a freshly created artifact
-	lintRules []func([]byte) error
-	syntax    func([]byte) error // tree-sitter syntax check; nil where syntax is unchecked (md)
-	semantic  func([]byte) error // strict semantic check where syntax is not enough; nil otherwise
-	// composeConstraint, when non-nil, runs against each composed fragment (its 0-based
-	// position and piece) and rejects a fragment that breaks a kind-specific structural
-	// rule the concatenation would otherwise hide — declarative, so compose.go stays
-	// kind-agnostic. nil where no such rule applies.
-	composeConstraint func(int, Piece) error
+	name     string
+	exts     []string // accepted extensions, primary first (yml also accepts .yaml)
+	category category
+	comment  commentSyntax // empty open = markerless (lock-managed; today's JSON)
+	shebang  bool          // marker follows a leading shebang; new files are executable
+	newMode  os.FileMode   // mode for a freshly created artifact
+
+	lintRules  []func([]byte) error
+	grammar    *grammar           // tree-sitter syntax gate; nil where unchecked (md)
+	neutralize neutralizer        // nil = fragments checked verbatim
+	semantic   func([]byte) error // decoder-strict check; doubles as post-compose validation for append kinds
+
+	codec  codec             // required iff category == catMerge
+	opener *openerConstraint // optional append-boundary rule; requires grammar
 }
 
 // specs is the per-kind registry, indexed by Kind. The ordered slice literal keeps
@@ -63,7 +88,7 @@ var specs = []spec{
 	KindMD: {
 		name:      "md",
 		exts:      []string{".md"},
-		strategy:  strategyAppend,
+		category:  catAppend,
 		comment:   commentSyntax{open: "<!-- ", close: " -->", match: "<!--"},
 		newMode:   0o644,
 		lintRules: []func([]byte) error{mdTokenFree},
@@ -71,52 +96,53 @@ var specs = []spec{
 		// and this dodges tree-sitter-markdown's split block/inline two-grammar model.
 	},
 	KindSH: {
-		name:      "sh",
-		exts:      []string{".sh"},
-		strategy:  strategyAppend,
-		comment:   commentSyntax{open: "# ", match: "# "},
-		shebang:   true,
-		newMode:   0o755,
-		lintRules: []func([]byte) error{shShebang, shNoMustache},
-		syntax:    bashSyntax,
+		name:       "sh",
+		exts:       []string{".sh"},
+		category:   catAppend,
+		comment:    commentSyntax{open: "# ", match: "# "},
+		shebang:    true,
+		newMode:    0o755,
+		lintRules:  []func([]byte) error{shShebang, shNoMustache},
+		grammar:    &grammar{lang: bashLang, wrap: ErrShellParse},
+		neutralize: neutralizeBareName,
 	},
 	KindJSON: {
-		name:     "json",
-		exts:     []string{".json"},
-		strategy: strategyMerge,
-		comment:  commentSyntax{}, // markerless: managed-ness comes from the lock alone
-		newMode:  0o644,
-		syntax:   jsonSyntax,
-		semantic: LintJSON,
+		name:       "json",
+		exts:       []string{".json"},
+		category:   catMerge,
+		comment:    commentSyntax{}, // markerless: managed-ness comes from the lock alone
+		newMode:    0o644,
+		grammar:    &grammar{lang: jsonLang, wrap: ErrJSONParse},
+		neutralize: neutralizeZero,
+		semantic:   LintJSON,
+		codec:      jsonCodec{},
 	},
 	KindYAML: {
-		name:     "yml",
-		exts:     []string{".yml", ".yaml"},
-		strategy: strategyAppend,
-		comment:  commentSyntax{open: "# ", match: "# "},
-		newMode:  0o644,
-		syntax:   yamlSyntax,
-		semantic: LintYAML,
+		name:       "yml",
+		exts:       []string{".yml", ".yaml"},
+		category:   catAppend,
+		comment:    commentSyntax{open: "# ", match: "# "},
+		newMode:    0o644,
+		grammar:    &grammar{lang: yamlLang, wrap: ErrYAMLParse},
+		neutralize: neutralizeBareName,
+		semantic:   LintYAML,
 	},
 	KindTOML: {
-		name:              "toml",
-		exts:              []string{".toml"},
-		strategy:          strategyAppend, // concat: fragments are disjoint table sets, comments + marker survive
-		comment:           commentSyntax{open: "# ", match: "# "},
-		newMode:           0o644,
-		syntax:            tomlSyntax,
-		semantic:          LintTOML, // BurntSushi decode catches a duplicate table, which tree-sitter cannot
-		composeConstraint: tomlTableFirst,
+		name:       "toml",
+		exts:       []string{".toml"},
+		category:   catAppend, // concat: fragments are disjoint table sets, comments + marker survive
+		comment:    commentSyntax{open: "# ", match: "# "},
+		newMode:    0o644,
+		grammar:    &grammar{lang: tomlLang, wrap: ErrTOMLParse},
+		neutralize: neutralizeDistinctInt,
+		semantic:   LintTOML, // BurntSushi decode catches a duplicate table, which tree-sitter cannot
+		opener:     &openerConstraint{kinds: []string{"table", "table_array_element"}, wrap: ErrTOMLRootKey},
 	},
 }
 
 // specOf returns the spec for a kind. Every Kind is minted by KindFromExt, so the
-// index is always in range for the strategy/marker/mode/lint queries.
+// index is always in range for the category/marker/mode/lint queries.
 func specOf(k Kind) spec { return specs[k] }
-
-// Merges reports whether the kind composes by deep merge (JSON) rather than by
-// ordered concatenation.
-func (k Kind) Merges() bool { return specOf(k).strategy == strategyMerge }
 
 // Markered reports whether the kind stamps a generated marker. A markerless kind
 // (JSON) is recognized as managed only through the lock.
@@ -137,10 +163,8 @@ func (k Kind) Lint(body []byte) []string {
 			out = append(out, err.Error())
 		}
 	}
-	if s.syntax != nil {
-		if err := s.syntax(body); err != nil {
-			return append(out, err.Error())
-		}
+	if err := syntaxCheck(s.grammar, s.neutralize, body); err != nil {
+		return append(out, err.Error())
 	}
 	if s.semantic != nil {
 		if err := s.semantic(body); err != nil {
@@ -172,7 +196,7 @@ func (k Kind) Lint(body []byte) []string {
 // rendered bytes are byte-identical to before this hook existed.
 func (k Kind) PostComposeValidate(body []byte) error {
 	s := specOf(k)
-	if s.strategy != strategyAppend || s.semantic == nil {
+	if s.category != catAppend || s.semantic == nil {
 		return nil
 	}
 	return s.semantic(body)
@@ -224,34 +248,6 @@ func shNoMustache(body []byte) error {
 	return nil
 }
 
-// tomlTableFirst rejects any TOML fragment after the first whose first non-blank,
-// non-comment line is not a table header. Concatenation carries TOML table context
-// across the fragment boundary, so a later fragment opening with a bare root-level key
-// would silently re-scope that key into the preceding fragment's trailing table — both
-// fragments validate alone and the composed whole still decodes, but the semantics
-// shift. Requiring a leading [table] header keeps every fragment's keys in the scope it
-// wrote them; the first fragment may open with root-level keys. A comment-only or blank
-// fragment adds no keys and passes. Indentation is trimmed to ASCII space and tab only —
-// the sole whitespace TOML permits before a key or header — so a header preceded by a
-// vertical tab, form feed, or other Unicode space (which strings.TrimSpace would strip)
-// is not the fragment's opener and fails the constraint.
-func tomlTableFirst(index int, p Piece) error {
-	if index == 0 {
-		return nil
-	}
-	for _, line := range strings.Split(string(p.Body), "\n") {
-		switch t := strings.Trim(line, " \t"); {
-		case t == "" || strings.HasPrefix(t, "#"):
-			continue
-		case strings.HasPrefix(t, "["):
-			return nil
-		default:
-			return fmt.Errorf("%w: %s", ErrTOMLRootKey, p.Origin)
-		}
-	}
-	return nil
-}
-
 // Grammar language pointers, loaded once at startup; each grammar vendors its C
 // source, so no network or file access happens at parse time.
 var (
@@ -261,20 +257,18 @@ var (
 	tomlLang = tstoml.Language()
 )
 
-func bashSyntax(body []byte) error {
-	return treeSitterSyntax(bashLang, ErrShellParse, shNeutralize(body))
-}
-
-func jsonSyntax(body []byte) error {
-	return treeSitterSyntax(jsonLang, ErrJSONParse, jsonNeutralize(body))
-}
-
-func yamlSyntax(body []byte) error {
-	return treeSitterSyntax(yamlLang, ErrYAMLParse, yamlNeutralize(body))
-}
-
-func tomlSyntax(body []byte) error {
-	return treeSitterSyntax(tomlLang, ErrTOMLParse, tomlNeutralize(body))
+// syntaxCheck runs the kind's tree-sitter grammar over the neutralized fragment body,
+// wrapping a parse failure in the grammar's sentinel. A nil grammar is unchecked (md);
+// a nil neutralizer parses the body verbatim.
+func syntaxCheck(g *grammar, neutralize neutralizer, body []byte) error {
+	if g == nil {
+		return nil
+	}
+	src := body
+	if neutralize != nil {
+		src = neutralize(body)
+	}
+	return treeSitterSyntax(g.lang, g.wrap, src)
 }
 
 // treeSitterSyntax parses src with the grammar and rejects on any ERROR or MISSING
@@ -294,28 +288,22 @@ func treeSitterSyntax(lang unsafe.Pointer, wrap error, src []byte) error {
 	return nil
 }
 
-// jsonNeutralize replaces every `{{token}}` with the scalar 0 so a placeholder-
+// neutralizeZero replaces every `{{token}}` with the scalar 0 so a placeholder-
 // bearing fragment parses as valid JSON — mirrors LintJSON's tolerance.
-func jsonNeutralize(body []byte) []byte {
+func neutralizeZero(body []byte) []byte {
 	return tokenRe.ReplaceAll(body, []byte("0"))
 }
 
-// yamlNeutralize replaces every `{{token}}` with its bare name so placeholders parse
-// as valid YAML scalars and distinct tokens stay distinct — mirrors LintYAML.
-func yamlNeutralize(body []byte) []byte {
+// neutralizeBareName replaces every `{{token}}` with its bare name — a valid word in
+// both bash and YAML — so a legitimately mustache-templated fragment parses and distinct
+// tokens stay distinct. GitHub-Actions `${{ … }}` expressions do not match tokenRe (the
+// space after `{{` and the uppercase/dotted body), so they are left verbatim and still
+// fail the bash syntax check — a declared, intended limitation.
+func neutralizeBareName(body []byte) []byte {
 	return tokenRe.ReplaceAllFunc(body, func(m []byte) []byte { return m[2 : len(m)-2] })
 }
 
-// shNeutralize replaces every `{{token}}` with its bare name — a valid bash word — so
-// a legitimately mustache-templated shell fragment (e.g. `{{binary}} --version`) parses
-// as valid shell, mirroring yamlNeutralize. GitHub-Actions `${{ … }}` expressions do
-// not match tokenRe (the space after `{{` and the uppercase/dotted body), so they are
-// left verbatim and still fail the bash syntax check — a declared, intended limitation.
-func shNeutralize(body []byte) []byte {
-	return tokenRe.ReplaceAllFunc(body, func(m []byte) []byte { return m[2 : len(m)-2] })
-}
-
-// tomlNeutralize replaces every distinct `{{token}}` with its own numeric literal so a
+// neutralizeDistinctInt replaces every distinct `{{token}}` with its own numeric literal so a
 // placeholder-bearing fragment parses as valid TOML in either key or value position (an
 // all-digit bare key is legal, as is an integer value) while distinct tokens stay distinct
 // — `[packs.{{first}}]` and `[packs.{{second}}]` must not both collapse to one table and
@@ -325,7 +313,7 @@ func shNeutralize(body []byte) []byte {
 // duplicate either. A token inside a typed scalar (a date like `2026-{{month}}-01`) can
 // still neutralize to a malformed typed value: context-free substitution cannot satisfy
 // every typed position.
-func tomlNeutralize(body []byte) []byte {
+func neutralizeDistinctInt(body []byte) []byte {
 	literals := map[string]bool{}
 	for _, m := range decimalRe.FindAll(body, -1) {
 		literals[string(m)] = true

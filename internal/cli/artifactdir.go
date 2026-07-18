@@ -116,9 +116,6 @@ func (ad *artifactDir) compose(ctx context.Context, imp source.Importer) ([]byte
 		}
 		pieces = append(pieces, p)
 	}
-	if ad.kind.Merges() {
-		return guide.ComposeJSON(pieces)
-	}
 	return guide.Compose(ad.kind, pieces)
 }
 

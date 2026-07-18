@@ -7,48 +7,38 @@ import (
 	"io"
 )
 
-// jsonValue is a parsed JSON value that preserves object key insertion order.
-// It is one of: *jsonObject, []jsonValue, string, json.Number, bool, or nullValue.
-type jsonValue = any
+// jsonCodec is the merge codec for JSON: a strict single-object-root parse into the
+// order-preserving tree, and a canonical 2-space re-encode. It satisfies codec.
+type jsonCodec struct{}
 
-// nullValue is JSON null, kept distinct from a Go nil so it round-trips.
-type nullValue struct{}
-
-// jsonObject is a JSON object that remembers the order its keys first appeared.
-type jsonObject struct {
-	keys []string
-	vals map[string]jsonValue
-}
-
-func newJSONObject() *jsonObject {
-	return &jsonObject{vals: map[string]jsonValue{}}
-}
-
-// set records key -> val, appending the key on first sight (first occurrence
-// fixes position) and letting a later value overwrite in place.
-func (o *jsonObject) set(key string, val jsonValue) {
-	if _, ok := o.vals[key]; !ok {
-		o.keys = append(o.keys, key)
+func (jsonCodec) parse(data []byte) (treeValue, error) {
+	obj, err := parseJSONObject(data)
+	if err != nil {
+		return nil, err
 	}
-	o.vals[key] = val
+	return obj, nil
+}
+
+func (jsonCodec) encode(v treeValue) ([]byte, error) {
+	return encodeJSON(v)
 }
 
 // LintJSON validates that body is a single well-formed JSON object with no
 // trailing content, tolerating {{token}} placeholders by treating each as a
 // neutral scalar (a real substitution runs at compose time).
 func LintJSON(body []byte) error {
-	_, err := parseJSONObject(jsonNeutralize(body))
+	_, err := parseJSONObject(neutralizeZero(body))
 	return err
 }
 
 // parseJSONObject strictly parses data as a single JSON object value with no
 // trailing content, preserving key order.
-func parseJSONObject(data []byte) (*jsonObject, error) {
+func parseJSONObject(data []byte) (*treeObject, error) {
 	v, err := parseJSONValue(data)
 	if err != nil {
 		return nil, err
 	}
-	obj, ok := v.(*jsonObject)
+	obj, ok := v.(*treeObject)
 	if !ok {
 		return nil, ErrJSONNotObject
 	}
@@ -56,7 +46,7 @@ func parseJSONObject(data []byte) (*jsonObject, error) {
 }
 
 // parseJSONValue parses data as one JSON value, rejecting trailing content.
-func parseJSONValue(data []byte) (jsonValue, error) {
+func parseJSONValue(data []byte) (treeValue, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	v, err := parseValue(dec)
@@ -69,7 +59,7 @@ func parseJSONValue(data []byte) (jsonValue, error) {
 	return v, nil
 }
 
-func parseValue(dec *json.Decoder) (jsonValue, error) {
+func parseValue(dec *json.Decoder) (treeValue, error) {
 	tok, err := dec.Token()
 	if err != nil {
 		return nil, err
@@ -97,8 +87,8 @@ func parseValue(dec *json.Decoder) (jsonValue, error) {
 	}
 }
 
-func parseObject(dec *json.Decoder) (*jsonObject, error) {
-	obj := newJSONObject()
+func parseObject(dec *json.Decoder) (*treeObject, error) {
+	obj := newTreeObject()
 	for dec.More() {
 		keyTok, err := dec.Token()
 		if err != nil {
@@ -120,8 +110,8 @@ func parseObject(dec *json.Decoder) (*jsonObject, error) {
 	return obj, nil
 }
 
-func parseArray(dec *json.Decoder) ([]jsonValue, error) {
-	arr := []jsonValue{}
+func parseArray(dec *json.Decoder) ([]treeValue, error) {
+	arr := []treeValue{}
 	for dec.More() {
 		val, err := parseValue(dec)
 		if err != nil {
@@ -137,7 +127,7 @@ func parseArray(dec *json.Decoder) ([]jsonValue, error) {
 
 // encodeJSON serializes v as stable, pretty JSON: 2-space indent, no HTML
 // escaping, LF newlines, and a single trailing newline.
-func encodeJSON(v jsonValue) ([]byte, error) {
+func encodeJSON(v treeValue) ([]byte, error) {
 	var b bytes.Buffer
 	if err := encodeValue(&b, v, 0); err != nil {
 		return nil, err
@@ -146,11 +136,11 @@ func encodeJSON(v jsonValue) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-func encodeValue(b *bytes.Buffer, v jsonValue, depth int) error {
+func encodeValue(b *bytes.Buffer, v treeValue, depth int) error {
 	switch t := v.(type) {
-	case *jsonObject:
+	case *treeObject:
 		return encodeObject(b, t, depth)
-	case []jsonValue:
+	case []treeValue:
 		return encodeArray(b, t, depth)
 	case nullValue:
 		b.WriteString("null")
@@ -172,7 +162,7 @@ func encodeValue(b *bytes.Buffer, v jsonValue, depth int) error {
 	}
 }
 
-func encodeObject(b *bytes.Buffer, obj *jsonObject, depth int) error {
+func encodeObject(b *bytes.Buffer, obj *treeObject, depth int) error {
 	if len(obj.keys) == 0 {
 		b.WriteString("{}")
 		return nil
@@ -198,7 +188,7 @@ func encodeObject(b *bytes.Buffer, obj *jsonObject, depth int) error {
 	return nil
 }
 
-func encodeArray(b *bytes.Buffer, arr []jsonValue, depth int) error {
+func encodeArray(b *bytes.Buffer, arr []treeValue, depth int) error {
 	if len(arr) == 0 {
 		b.WriteString("[]")
 		return nil

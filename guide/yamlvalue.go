@@ -14,7 +14,7 @@ import (
 // scalar named after the token (a real substitution runs at compose time; the
 // name keeps distinct token keys distinct under yaml.v3's duplicate-key check).
 func LintYAML(body []byte) error {
-	dec := yaml.NewDecoder(bytes.NewReader(yamlNeutralize(body)))
+	dec := yaml.NewDecoder(bytes.NewReader(neutralizeBareName(body)))
 	for {
 		var v any
 		switch err := dec.Decode(&v); {
