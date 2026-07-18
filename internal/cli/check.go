@@ -150,6 +150,13 @@ func checkV3Locked(ctx context.Context, ad *artifactDir, disk []byte, lock *lock
 	if err != nil {
 		return "", ad.target, true, err
 	}
+	// Run the same post-compose validation render runs, so a locked artifact whose
+	// composed content fails a semantic check (a duplicate TOML table, a duplicate YAML
+	// root key) fails check with render's message and exit code — never reporting OK
+	// where render would refuse.
+	if err := ad.kind.PostComposeValidate(body); err != nil {
+		return "", ad.target, true, fmt.Errorf("%s: %w", ad.target, err)
+	}
 	diskBody := disk
 	if ad.kind.Markered() {
 		diskBody, _ = guide.StripMarker(ad.kind, disk)

@@ -72,6 +72,56 @@ func TestRenderTOMLDuplicateTableFails(t *testing.T) {
 	}
 }
 
+// check runs the same post-compose validation render runs: a locked TOML artifact whose
+// content fails the semantic check (a duplicate table across fragments) must fail check
+// with a non-zero exit naming the offending table — never reporting OK where render
+// refuses. The lock is bootstrapped by a valid render, then the fragments and the
+// on-disk artifact are corrupted to the (invalid) recomposed body so a byte-compare
+// alone would pass.
+func TestCheckTOMLDuplicateTableFails(t *testing.T) {
+	repo(t)
+	target := ".claude/capt-hook.toml"
+	dir := ".claude/fragments/" + target
+	write(t, dir+"/layout.toml", "fragments = [\"a\", \"b\"]\n")
+	write(t, dir+"/a.fragment.toml", "[packs.general]\nsource = \"builtin\"\n")
+	write(t, dir+"/b.fragment.toml", "[packs.go]\nsource = \"builtin\"\n")
+	if code, _, errout := exec("render"); code != 0 {
+		t.Fatalf("bootstrap render exit=%d: %s", code, errout)
+	}
+	write(t, dir+"/b.fragment.toml", "[packs.general]\nsource = \"other\"\n")
+	body := "[packs.general]\nsource = \"builtin\"\n\n[packs.general]\nsource = \"other\"\n"
+	write(t, target, shMarker(dir)+"\n"+body)
+
+	code, _, errout := exec("check")
+	if code != 2 {
+		t.Fatalf("check must exit 2 on a locked artifact that fails post-compose validation, got %d (err=%q)", code, errout)
+	}
+	if !strings.Contains(errout, "packs.general") {
+		t.Fatalf("check error must name the offending table, got %q", errout)
+	}
+}
+
+// The same for a locked YAML artifact whose content composes to a duplicate top-level
+// key (yaml.v3 rejects it): check must fail rather than report OK.
+func TestCheckYAMLDuplicateKeyFails(t *testing.T) {
+	repo(t)
+	target := ".github/workflows/x.yml"
+	dir := ".claude/fragments/" + target
+	write(t, dir+"/layout.toml", "fragments = [\"a\", \"b\"]\n")
+	write(t, dir+"/a.fragment.yml", "name: CI\non: push\n")
+	write(t, dir+"/b.fragment.yml", "other: x\n")
+	if code, _, errout := exec("render"); code != 0 {
+		t.Fatalf("bootstrap render exit=%d: %s", code, errout)
+	}
+	write(t, dir+"/b.fragment.yml", "name: Other\n")
+	body := "name: CI\non: push\n\nname: Other\n"
+	write(t, target, ymlMarker(dir)+"\n"+body)
+
+	if code, _, errout := exec("check"); code != 2 {
+		t.Fatalf("check must exit 2 on a locked yaml artifact with a duplicate root key, got %d (err=%q)", code, errout)
+	}
+}
+
 // lint validates toml fragments: a well-formed table set (token-bearing included) is
 // clean, and each impurity reddens the gate with its own message in isolation — a
 // duplicate table WITHIN one fragment (which the grammar accepts but the decoder
