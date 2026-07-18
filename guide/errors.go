@@ -55,4 +55,10 @@ var (
 	// decoder rejects — most usefully a table defined twice, which the grammar accepts
 	// but TOML semantics forbid.
 	ErrTOMLDecode = errors.New("invalid TOML")
+
+	// ErrTOMLRootKey is a TOML fragment after the first that opens with a bare
+	// root-level key. TOML table context persists across a concatenation boundary, so
+	// such a key would be silently re-scoped into the preceding fragment's trailing
+	// table; a later fragment must open with a [table] header.
+	ErrTOMLRootKey = errors.New("toml fragment after the first must open with a [table] header")
 )

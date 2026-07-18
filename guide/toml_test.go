@@ -123,6 +123,69 @@ func TestTOMLPostComposeDuplicateTable(t *testing.T) {
 	}
 }
 
+// Distinct {{token}} placeholders in table-header position neutralize to distinct
+// numeric literals, so a legitimately-templated pair of tables is not read as a false
+// duplicate — while the same token twice is still a genuine duplicate that fails.
+func TestLintTOMLDistinctTokens(t *testing.T) {
+	if err := guide.LintTOML([]byte("[packs.{{first}}]\nsource = \"builtin\"\n[packs.{{second}}]\nsource = \"other\"\n")); err != nil {
+		t.Fatalf("distinct-token tables must lint clean, got %v", err)
+	}
+	if err := guide.LintTOML([]byte("[packs.{{a}}]\nx = 1\n[packs.{{a}}]\ny = 2\n")); !errors.Is(err, guide.ErrTOMLDecode) {
+		t.Fatalf("the same token twice must still fail as a duplicate table, got %v", err)
+	}
+}
+
+// A TOML fragment after the first must open with a [table] header, because TOML table
+// context persists across the concatenation boundary: a later fragment's bare root-level
+// key would be silently re-scoped into the preceding fragment's trailing table. The
+// first fragment may open with root-level keys.
+func TestComposeTOMLTableFirst(t *testing.T) {
+	rootFirst := guide.Piece{Body: []byte("schema = 1\n[packs.general]\nsource = \"builtin\"\n"), Origin: "first.toml"}
+	tableSecond := guide.Piece{Body: []byte("[packs.go]\nsource = \"builtin\"\n"), Origin: "second.toml"}
+	rootSecond := guide.Piece{Body: []byte("# a comment\nsource = \"leaked\"\n"), Origin: "bad.toml"}
+
+	// First fragment with root keys, second opening with a table: composes cleanly.
+	if _, err := guide.Compose(guide.KindTOML, []guide.Piece{rootFirst, tableSecond}); err != nil {
+		t.Fatalf("root-key first + table-led second must compose: %v", err)
+	}
+	// Second fragment opening (past comments) with a bare root-level key: rejected,
+	// naming the offending fragment.
+	_, err := guide.Compose(guide.KindTOML, []guide.Piece{tableSecond, rootSecond})
+	if !errors.Is(err, guide.ErrTOMLRootKey) {
+		t.Fatalf("bare-root-key second fragment must fail with ErrTOMLRootKey, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "bad.toml") {
+		t.Fatalf("error must name the offending fragment, got %q", err)
+	}
+}
+
+// STEWARDSHIP: a `%YAML 1.2` directive fragment that old render accepted is now rejected
+// by post-compose YAML validation (yaml.v3 rejects it as an incompatible document). This
+// is intended fail-fast — zero fleet usage, and lint already rejected it — pinned so the
+// decision is recorded.
+func TestYAMLDirectiveRejectedPostCompose(t *testing.T) {
+	if err := guide.KindYAML.PostComposeValidate([]byte("%YAML 1.2\n---\nname: x\n")); !errors.Is(err, guide.ErrYAMLParse) {
+		t.Fatalf("a %%YAML 1.2 directive must fail post-compose YAML validation, got %v", err)
+	}
+}
+
+// A legitimately mustache-templated shell fragment passes sh lint: each {{token}} is
+// neutralized to its bare name (a valid bash word) before the tree-sitter-bash syntax
+// parse. A genuinely malformed fragment still fails, and a GitHub-Actions ${{ … }}
+// expression — a declared, intended exception that does not match the token regex — is
+// left verbatim and still fails, pinned so the decision is recorded.
+func TestSHLintMustacheTokens(t *testing.T) {
+	if vs := guide.KindSH.Lint([]byte("#!/bin/sh\n{{binary}} --version\n")); len(vs) != 0 {
+		t.Fatalf("a mustache-templated shell fragment must lint clean, got %v", vs)
+	}
+	if vs := guide.KindSH.Lint([]byte("#!/bin/sh\necho 'unterminated\n")); len(vs) == 0 {
+		t.Fatal("a malformed shell fragment must still fail sh lint")
+	}
+	if vs := guide.KindSH.Lint([]byte("#!/bin/sh\necho \"${{ github.run_number }}\"\n")); len(vs) == 0 {
+		t.Fatal("a GitHub-Actions ${{ … }} expression in a shell fragment must still fail sh lint")
+	}
+}
+
 // {{token}} placeholders are tolerated by the toml validators (neutralized to a
 // scalar), in a value or a whole-scalar position — a real substitution runs at
 // compose time — while genuinely malformed TOML still fails.

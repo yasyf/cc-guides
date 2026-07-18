@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"unsafe"
 
@@ -49,6 +50,11 @@ type spec struct {
 	lintRules []func([]byte) error
 	syntax    func([]byte) error // tree-sitter syntax check; nil where syntax is unchecked (md)
 	semantic  func([]byte) error // strict semantic check where syntax is not enough; nil otherwise
+	// composeConstraint, when non-nil, runs against each composed fragment (its 0-based
+	// position and piece) and rejects a fragment that breaks a kind-specific structural
+	// rule the concatenation would otherwise hide — declarative, so compose.go stays
+	// kind-agnostic. nil where no such rule applies.
+	composeConstraint func(int, Piece) error
 }
 
 // specs is the per-kind registry, indexed by Kind. The ordered slice literal keeps
@@ -93,13 +99,14 @@ var specs = []spec{
 		semantic: LintYAML,
 	},
 	KindTOML: {
-		name:     "toml",
-		exts:     []string{".toml"},
-		strategy: strategyAppend, // concat: fragments are disjoint table sets, comments + marker survive
-		comment:  commentSyntax{open: "# ", match: "# "},
-		newMode:  0o644,
-		syntax:   tomlSyntax,
-		semantic: LintTOML, // BurntSushi decode catches a duplicate table, which tree-sitter cannot
+		name:              "toml",
+		exts:              []string{".toml"},
+		strategy:          strategyAppend, // concat: fragments are disjoint table sets, comments + marker survive
+		comment:           commentSyntax{open: "# ", match: "# "},
+		newMode:           0o644,
+		syntax:            tomlSyntax,
+		semantic:          LintTOML, // BurntSushi decode catches a duplicate table, which tree-sitter cannot
+		composeConstraint: tomlTableFirst,
 	},
 }
 
@@ -217,6 +224,31 @@ func shNoMustache(body []byte) error {
 	return nil
 }
 
+// tomlTableFirst rejects any TOML fragment after the first whose first non-blank,
+// non-comment line is not a table header. Concatenation carries TOML table context
+// across the fragment boundary, so a later fragment opening with a bare root-level key
+// would silently re-scope that key into the preceding fragment's trailing table — both
+// fragments validate alone and the composed whole still decodes, but the semantics
+// shift. Requiring a leading [table] header keeps every fragment's keys in the scope it
+// wrote them; the first fragment may open with root-level keys. A comment-only or blank
+// fragment adds no keys and passes.
+func tomlTableFirst(index int, p Piece) error {
+	if index == 0 {
+		return nil
+	}
+	for _, line := range strings.Split(string(p.Body), "\n") {
+		switch t := strings.TrimSpace(line); {
+		case t == "" || strings.HasPrefix(t, "#"):
+			continue
+		case strings.HasPrefix(t, "["):
+			return nil
+		default:
+			return fmt.Errorf("%w: %s", ErrTOMLRootKey, p.Origin)
+		}
+	}
+	return nil
+}
+
 // Grammar language pointers, loaded once at startup; each grammar vendors its C
 // source, so no network or file access happens at parse time.
 var (
@@ -226,7 +258,10 @@ var (
 	tomlLang = tstoml.Language()
 )
 
-func bashSyntax(body []byte) error { return treeSitterSyntax(bashLang, ErrShellParse, body) }
+func bashSyntax(body []byte) error {
+	return treeSitterSyntax(bashLang, ErrShellParse, shNeutralize(body))
+}
+
 func jsonSyntax(body []byte) error {
 	return treeSitterSyntax(jsonLang, ErrJSONParse, jsonNeutralize(body))
 }
@@ -268,9 +303,31 @@ func yamlNeutralize(body []byte) []byte {
 	return tokenRe.ReplaceAllFunc(body, func(m []byte) []byte { return m[2 : len(m)-2] })
 }
 
-// tomlNeutralize replaces every `{{token}}` with the scalar 0 so a placeholder-
-// bearing fragment parses as valid TOML in either key or value position — mirrors
-// jsonNeutralize (a bare identifier is not a valid TOML value, so 0, not the name).
+// shNeutralize replaces every `{{token}}` with its bare name — a valid bash word — so
+// a legitimately mustache-templated shell fragment (e.g. `{{binary}} --version`) parses
+// as valid shell, mirroring yamlNeutralize. GitHub-Actions `${{ … }}` expressions do
+// not match tokenRe (the space after `{{` and the uppercase/dotted body), so they are
+// left verbatim and still fail the bash syntax check — a declared, intended limitation.
+func shNeutralize(body []byte) []byte {
+	return tokenRe.ReplaceAllFunc(body, func(m []byte) []byte { return m[2 : len(m)-2] })
+}
+
+// tomlNeutralize replaces every distinct `{{token}}` with its own numeric literal
+// (1000 + first-seen index) so a placeholder-bearing fragment parses as valid TOML in
+// either key or value position (an all-digit bare key is legal, as is an integer value)
+// while distinct tokens stay distinct — `[packs.{{first}}]` and `[packs.{{second}}]`
+// must not both collapse to one table and read as a false duplicate. A token inside a
+// typed scalar (a date like `2026-{{month}}-01`) can still neutralize to a malformed
+// typed value: context-free substitution cannot satisfy every typed position.
 func tomlNeutralize(body []byte) []byte {
-	return tokenRe.ReplaceAll(body, []byte("0"))
+	idx := map[string]int{}
+	return tokenRe.ReplaceAllFunc(body, func(m []byte) []byte {
+		name := string(m[2 : len(m)-2])
+		n, ok := idx[name]
+		if !ok {
+			n = 1000 + len(idx)
+			idx[name] = n
+		}
+		return []byte(strconv.Itoa(n))
+	})
 }

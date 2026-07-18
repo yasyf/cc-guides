@@ -33,12 +33,20 @@ type Piece struct {
 //	    blank line, and the whole ends in exactly one trailing newline;
 //	(4) only the FIRST piece of a .sh artifact may begin `#!` — a later piece
 //	    beginning `#!` is a hard error;
-//	    CRLF anywhere is a hard error.
+//	    CRLF anywhere is a hard error;
+//	(5) a kind may declare a per-fragment composeConstraint (spec.go) that rejects a
+//	    piece breaking a structural rule the concatenation would otherwise hide (toml:
+//	    a later fragment must open with a [table] header).
 func Compose(kind Kind, pieces []Piece) ([]byte, error) {
 	parts := make([]string, 0, len(pieces))
 	for i, p := range pieces {
 		if bytes.IndexByte(p.Body, '\r') >= 0 {
 			return nil, fmt.Errorf("%w: %s", ErrCRLF, p.Origin)
+		}
+		if c := specOf(kind).composeConstraint; c != nil {
+			if err := c(i, p); err != nil {
+				return nil, err
+			}
 		}
 		body := strings.TrimRight(string(p.Body), "\n")
 		if specOf(kind).shebang && i != 0 && strings.HasPrefix(body, "#!") {
