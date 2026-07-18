@@ -151,7 +151,7 @@ func checkV3Locked(ctx context.Context, ad *artifactDir, disk []byte, lock *lock
 		return "", ad.target, true, err
 	}
 	diskBody := disk
-	if ad.kind != guide.KindJSON {
+	if ad.kind.Markered() {
 		diskBody, _ = guide.StripMarker(ad.kind, disk)
 	}
 	return compareBodies(ad.target, diskBody, body, diff, stderr), ad.target, false, nil

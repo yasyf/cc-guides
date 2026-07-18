@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -14,9 +13,6 @@ import (
 
 	"github.com/yasyf/cc-guides/guide"
 )
-
-// lowerTokenRe matches a lowercase `{{token}}` substitution token.
-var lowerTokenRe = regexp.MustCompile(`\{\{[a-z][a-z0-9-]*\}\}`)
 
 func newLintCmd() *cobra.Command {
 	return &cobra.Command{
@@ -117,26 +113,8 @@ func lintFile(root, path string) []string {
 	} else if bytes.HasSuffix(body, []byte("\n\n")) {
 		add("must end with exactly one trailing newline")
 	}
-	switch kind {
-	case guide.KindMD:
-		if m := lowerTokenRe.Find(body); m != nil {
-			add(fmt.Sprintf("markdown fragment must be token-free, found %q", m))
-		}
-	case guide.KindSH:
-		if !bytes.HasPrefix(body, []byte("#!/bin/sh\n")) {
-			add("shell fragment must start with a #!/bin/sh shebang")
-		}
-		if bytes.Contains(body, []byte("{{#")) || bytes.Contains(body, []byte("{{/")) {
-			add("leftover mustache block markers ({{# / {{/)")
-		}
-	case guide.KindJSON:
-		if err := guide.LintJSON(body); err != nil {
-			add(err.Error())
-		}
-	case guide.KindYAML:
-		if err := guide.LintYAML(body); err != nil {
-			add(err.Error())
-		}
+	for _, msg := range kind.Lint(body) {
+		add(msg)
 	}
 	return vs
 }

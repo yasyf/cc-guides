@@ -44,4 +44,7 @@ var (
 
 	// ErrYAMLParse is a YAML fragment that is not well-formed YAML.
 	ErrYAMLParse = errors.New("invalid YAML fragment")
+
+	// ErrShellParse is a shell fragment that is not well-formed under the grammar.
+	ErrShellParse = errors.New("invalid shell fragment")
 )

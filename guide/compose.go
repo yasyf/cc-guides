@@ -41,7 +41,7 @@ func Compose(kind Kind, pieces []Piece) ([]byte, error) {
 			return nil, fmt.Errorf("%w: %s", ErrCRLF, p.Origin)
 		}
 		body := strings.TrimRight(string(p.Body), "\n")
-		if kind == KindSH && i != 0 && strings.HasPrefix(body, "#!") {
+		if specOf(kind).shebang && i != 0 && strings.HasPrefix(body, "#!") {
 			return nil, fmt.Errorf("%w: %s", ErrShebangNotFirst, p.Origin)
 		}
 		if p.Args != nil {

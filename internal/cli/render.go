@@ -132,7 +132,7 @@ func renderV3(ctx context.Context, cmd *cobra.Command, root string, dirs []strin
 			return exit(2, fmt.Errorf("%s: %w", ad.dir, err))
 		}
 		final := body
-		if ad.kind != guide.KindJSON {
+		if ad.kind.Markered() {
 			final = guide.AddMarker(ad.kind, ad.dir, body)
 		}
 		outputs = append(outputs, output{ad, final})
@@ -209,7 +209,7 @@ func scopedPins(scoped bool, existing *lockfile.Lock, specs map[string]string) (
 // lock's artifacts (the only mechanism for pristine json).
 func v3Overwritable(ad *artifactDir, lock *lockfile.Lock) func([]byte) bool {
 	return func(disk []byte) bool {
-		if ad.kind != guide.KindJSON {
+		if ad.kind.Markered() {
 			if _, ok := guide.ParseMarker(ad.kind, disk); ok {
 				return true
 			}
@@ -262,7 +262,7 @@ func writeArtifact(cmd *cobra.Command, root, target, srcLabel string, kind guide
 		return nil
 	}
 
-	mode := os.FileMode(0o644)
+	mode := kind.NewFileMode()
 	exists := false
 	if info, statErr := os.Stat(abs); statErr == nil {
 		exists = true
@@ -271,20 +271,18 @@ func writeArtifact(cmd *cobra.Command, root, target, srcLabel string, kind guide
 		if !canOverwrite(disk) && !o.force {
 			return exit(2, fmt.Errorf("%w: %s (pass --force to overwrite)", guide.ErrHandwrittenOverwrite, target))
 		}
-	} else if kind == guide.KindSH {
-		mode = 0o755
 	}
 
 	if err := os.MkdirAll(filepath.Dir(abs), 0o750); err != nil {
 		return exit(2, err)
 	}
-	// Generated artifacts are world-readable and .sh must be executable, so the
-	// modes are intentionally looser than gosec's 0600 default.
+	// Generated artifacts are world-readable and an executable kind (.sh) must keep
+	// its exec bit, so the modes are intentionally looser than gosec's 0600 default.
 	if err := os.WriteFile(abs, final, mode); err != nil { // #nosec G302 G306 -- artifact path and perms are intentional
 		return exit(2, err)
 	}
-	if !exists && kind == guide.KindSH {
-		if err := os.Chmod(abs, 0o755); err != nil { // #nosec G302 -- shell artifacts must be executable
+	if !exists && mode&0o111 != 0 {
+		if err := os.Chmod(abs, mode); err != nil { // #nosec G302 -- executable artifacts keep their exec bit
 			return exit(2, err)
 		}
 	}

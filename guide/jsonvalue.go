@@ -37,7 +37,7 @@ func (o *jsonObject) set(key string, val jsonValue) {
 // trailing content, tolerating {{token}} placeholders by treating each as a
 // neutral scalar (a real substitution runs at compose time).
 func LintJSON(body []byte) error {
-	_, err := parseJSONObject(tokenRe.ReplaceAll(body, []byte("0")))
+	_, err := parseJSONObject(jsonNeutralize(body))
 	return err
 }
 

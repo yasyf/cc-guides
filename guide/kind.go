@@ -8,7 +8,8 @@ import (
 
 // Kind is the comment style / file family of an artifact or fragment. The set is
 // deliberately small and closed; an unknown extension is a loud error, never a
-// silent passthrough.
+// silent passthrough. Each Kind indexes exactly one spec in the registry (spec.go),
+// which is the single source of every kind-specific behavior.
 type Kind int
 
 const (
@@ -26,52 +27,31 @@ const (
 // building a kind-mismatch diagnostic.
 var AllKinds = []Kind{KindMD, KindSH, KindJSON, KindYAML}
 
+// valid reports whether k indexes a registered spec.
+func (k Kind) valid() bool { return int(k) >= 0 && int(k) < len(specs) }
+
 // String returns the short name used in TSV output, the kind subdir, and diagnostics.
 func (k Kind) String() string {
-	switch k {
-	case KindMD:
-		return "md"
-	case KindSH:
-		return "sh"
-	case KindJSON:
-		return "json"
-	case KindYAML:
-		return "yml"
-	default:
+	if !k.valid() {
 		return "unknown"
 	}
+	return specs[k].name
 }
 
-// Ext returns the file extension (with leading dot) for the kind.
+// Ext returns the primary file extension (with leading dot) for the kind.
 func (k Kind) Ext() string {
-	switch k {
-	case KindMD:
-		return ".md"
-	case KindSH:
-		return ".sh"
-	case KindJSON:
-		return ".json"
-	case KindYAML:
-		return ".yml"
-	default:
+	if !k.valid() {
 		return ""
 	}
+	return specs[k].exts[0]
 }
 
 // KindFromExt maps a file extension (with leading dot) to its Kind.
 func KindFromExt(ext string) (Kind, error) {
-	switch strings.ToLower(ext) {
-	case ".md":
-		return KindMD, nil
-	case ".sh":
-		return KindSH, nil
-	case ".json":
-		return KindJSON, nil
-	case ".yml", ".yaml":
-		return KindYAML, nil
-	default:
-		return 0, fmt.Errorf("%w: %q (supported: .md, .sh, .json, .yml, .yaml)", ErrUnknownExt, ext)
+	if k, ok := extIndex[strings.ToLower(ext)]; ok {
+		return k, nil
 	}
+	return 0, fmt.Errorf("%w: %q (supported: %s)", ErrUnknownExt, ext, supportedExts)
 }
 
 // KindForPath derives a Kind from a path's extension.

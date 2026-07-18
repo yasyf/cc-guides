@@ -27,17 +27,11 @@ type MarkerInfo struct {
 	Src string
 }
 
-// MarkerLine wraps the marker core in the comment style for kind.
+// MarkerLine wraps the marker core in the comment style for kind. A markerless
+// kind (JSON) has an empty wrapper, so this returns the bare core it never stamps.
 func MarkerLine(kind Kind, srcDir string) string {
-	core := MarkerCore(srcDir)
-	switch kind {
-	case KindMD:
-		return "<!-- " + core + " -->"
-	case KindSH, KindYAML:
-		return "# " + core
-	default:
-		return core
-	}
+	c := specOf(kind).comment
+	return c.open + MarkerCore(srcDir) + c.close
 }
 
 // AddMarker splices the version-free marker into composed content and returns
@@ -47,7 +41,7 @@ func AddMarker(kind Kind, srcDir string, content []byte) []byte {
 	line := MarkerLine(kind, srcDir)
 	body := string(content)
 	var out string
-	if kind == KindSH && strings.HasPrefix(body, "#!") {
+	if specOf(kind).shebang && strings.HasPrefix(body, "#!") {
 		if nl := strings.IndexByte(body, '\n'); nl >= 0 {
 			out = body[:nl] + "\n" + line + "\n" + body[nl+1:]
 		} else {
@@ -70,7 +64,7 @@ func ParseMarker(kind Kind, content []byte) (MarkerInfo, bool) {
 	if info, ok := matchMarkerLine(kind, lines[0]); ok {
 		return info, true
 	}
-	if kind == KindSH && len(lines) >= 2 && strings.HasPrefix(lines[0], "#!") {
+	if specOf(kind).shebang && len(lines) >= 2 && strings.HasPrefix(lines[0], "#!") {
 		if info, ok := matchMarkerLine(kind, lines[1]); ok {
 			return info, true
 		}
@@ -88,7 +82,7 @@ func StripMarker(kind Kind, content []byte) ([]byte, bool) {
 	if _, ok := matchMarkerLine(kind, lines[0]); ok {
 		return afterLine(content, 0), true
 	}
-	if kind == KindSH && len(lines) >= 2 && strings.HasPrefix(lines[0], "#!") {
+	if specOf(kind).shebang && len(lines) >= 2 && strings.HasPrefix(lines[0], "#!") {
 		if _, ok := matchMarkerLine(kind, lines[1]); ok {
 			return append([]byte(lines[0]+"\n"), afterLine(content, 1)...), true
 		}
@@ -98,22 +92,16 @@ func StripMarker(kind Kind, content []byte) ([]byte, bool) {
 
 // matchMarkerLine matches the marker core within a single line AND requires the
 // comment wrapper to match kind (clobber-safety over recognition): an HTML comment
-// for markdown, a `# ` comment for shell. A wrong-kind wrapper is NOT recognized,
-// so render/check never treats it as a clobberable generated file.
+// for markdown, a `# ` comment for shell/yaml. A wrong-kind wrapper is NOT
+// recognized, so render/check never treats it as a clobberable generated file. A
+// markerless kind (JSON) imposes no wrapper requirement.
 func matchMarkerLine(kind Kind, line string) (MarkerInfo, bool) {
 	m := markerCoreRe.FindStringSubmatch(line)
 	if m == nil {
 		return MarkerInfo{}, false
 	}
-	switch kind {
-	case KindMD:
-		if !strings.HasPrefix(line, "<!--") {
-			return MarkerInfo{}, false
-		}
-	case KindSH, KindYAML:
-		if !strings.HasPrefix(line, "# ") {
-			return MarkerInfo{}, false
-		}
+	if match := specOf(kind).comment.match; match != "" && !strings.HasPrefix(line, match) {
+		return MarkerInfo{}, false
 	}
 	return MarkerInfo{Src: m[1]}, true
 }

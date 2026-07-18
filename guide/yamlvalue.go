@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // LintYAML validates that body is well-formed YAML — every document parses with
@@ -14,8 +14,7 @@ import (
 // scalar named after the token (a real substitution runs at compose time; the
 // name keeps distinct token keys distinct under yaml.v3's duplicate-key check).
 func LintYAML(body []byte) error {
-	stripped := tokenRe.ReplaceAllFunc(body, func(m []byte) []byte { return m[2 : len(m)-2] })
-	dec := yaml.NewDecoder(bytes.NewReader(stripped))
+	dec := yaml.NewDecoder(bytes.NewReader(yamlNeutralize(body)))
 	for {
 		var v any
 		switch err := dec.Decode(&v); {
