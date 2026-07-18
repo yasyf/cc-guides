@@ -133,6 +133,12 @@ func TestLintTOMLDistinctTokens(t *testing.T) {
 	if err := guide.LintTOML([]byte("[packs.{{a}}]\nx = 1\n[packs.{{a}}]\ny = 2\n")); !errors.Is(err, guide.ErrTOMLDecode) {
 		t.Fatalf("the same token twice must still fail as a duplicate table, got %v", err)
 	}
+	// A literal numeric table (here [packs.1000]) alongside a {{token}} table must NOT
+	// read as a duplicate: the token neutralizes to the smallest integer >= 1000 that is
+	// not a literal in the body (1001, since 1000 is present), so the tables stay distinct.
+	if err := guide.LintTOML([]byte("[packs.1000]\nx = 1\n[packs.{{first}}]\nsource = \"builtin\"\n")); err != nil {
+		t.Fatalf("a literal [packs.1000] plus a token table must lint clean, got %v", err)
+	}
 }
 
 // A TOML fragment after the first must open with a [table] header, because TOML table
@@ -156,6 +162,12 @@ func TestComposeTOMLTableFirst(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "bad.toml") {
 		t.Fatalf("error must name the offending fragment, got %q", err)
+	}
+	// A header preceded by a vertical tab — whitespace TOML forbids as indentation, so not
+	// a real opener — is not recognized as the fragment's [table] header and is rejected.
+	vtabSecond := guide.Piece{Body: []byte("\v[packs.go]\nsource = \"builtin\"\n"), Origin: "vtab.toml"}
+	if _, err := guide.Compose(guide.KindTOML, []guide.Piece{tableSecond, vtabSecond}); !errors.Is(err, guide.ErrTOMLRootKey) {
+		t.Fatalf("a vertical-tab-indented header must fail with ErrTOMLRootKey, got %v", err)
 	}
 }
 

@@ -13,6 +13,12 @@ import (
 // declared args drive substitution, and only inside a piece that carries args.
 var tokenRe = regexp.MustCompile(`\{\{[a-z][a-z0-9-]*\}\}`)
 
+// decimalRe matches a maximal run of ASCII digits — a decimal integer literal in a
+// fragment body. TOML token neutralization scans these so a placeholder is never assigned
+// a number that already appears as a literal key or value (which would read as a false
+// duplicate table, e.g. a source `[packs.1000]` colliding with a neutralized token).
+var decimalRe = regexp.MustCompile(`\d+`)
+
 // Piece is one resolved composition input: a fragment body plus, when the layout
 // entry declared them, the args that drive token substitution. A piece with a nil
 // Args map is emitted byte-for-byte (never scanned for tokens) — load-bearing:

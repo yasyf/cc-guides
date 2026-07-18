@@ -231,13 +231,16 @@ func shNoMustache(body []byte) error {
 // fragments validate alone and the composed whole still decodes, but the semantics
 // shift. Requiring a leading [table] header keeps every fragment's keys in the scope it
 // wrote them; the first fragment may open with root-level keys. A comment-only or blank
-// fragment adds no keys and passes.
+// fragment adds no keys and passes. Indentation is trimmed to ASCII space and tab only —
+// the sole whitespace TOML permits before a key or header — so a header preceded by a
+// vertical tab, form feed, or other Unicode space (which strings.TrimSpace would strip)
+// is not the fragment's opener and fails the constraint.
 func tomlTableFirst(index int, p Piece) error {
 	if index == 0 {
 		return nil
 	}
 	for _, line := range strings.Split(string(p.Body), "\n") {
-		switch t := strings.TrimSpace(line); {
+		switch t := strings.Trim(line, " \t"); {
 		case t == "" || strings.HasPrefix(t, "#"):
 			continue
 		case strings.HasPrefix(t, "["):
@@ -312,22 +315,34 @@ func shNeutralize(body []byte) []byte {
 	return tokenRe.ReplaceAllFunc(body, func(m []byte) []byte { return m[2 : len(m)-2] })
 }
 
-// tomlNeutralize replaces every distinct `{{token}}` with its own numeric literal
-// (1000 + first-seen index) so a placeholder-bearing fragment parses as valid TOML in
-// either key or value position (an all-digit bare key is legal, as is an integer value)
-// while distinct tokens stay distinct — `[packs.{{first}}]` and `[packs.{{second}}]`
-// must not both collapse to one table and read as a false duplicate. A token inside a
-// typed scalar (a date like `2026-{{month}}-01`) can still neutralize to a malformed
-// typed value: context-free substitution cannot satisfy every typed position.
+// tomlNeutralize replaces every distinct `{{token}}` with its own numeric literal so a
+// placeholder-bearing fragment parses as valid TOML in either key or value position (an
+// all-digit bare key is legal, as is an integer value) while distinct tokens stay distinct
+// — `[packs.{{first}}]` and `[packs.{{second}}]` must not both collapse to one table and
+// read as a false duplicate. Each token's literal is the smallest integer >= 1000 that is
+// neither already assigned nor a decimal literal already present in the body, so a source
+// table like `[packs.1000]` cannot collide with a neutralized token and read as a false
+// duplicate either. A token inside a typed scalar (a date like `2026-{{month}}-01`) can
+// still neutralize to a malformed typed value: context-free substitution cannot satisfy
+// every typed position.
 func tomlNeutralize(body []byte) []byte {
-	idx := map[string]int{}
+	literals := map[string]bool{}
+	for _, m := range decimalRe.FindAll(body, -1) {
+		literals[string(m)] = true
+	}
+	assigned := map[string][]byte{}
+	next := 1000
 	return tokenRe.ReplaceAllFunc(body, func(m []byte) []byte {
 		name := string(m[2 : len(m)-2])
-		n, ok := idx[name]
+		lit, ok := assigned[name]
 		if !ok {
-			n = 1000 + len(idx)
-			idx[name] = n
+			for literals[strconv.Itoa(next)] {
+				next++
+			}
+			lit = []byte(strconv.Itoa(next))
+			assigned[name] = lit
+			next++
 		}
-		return []byte(strconv.Itoa(n))
+		return lit
 	})
 }

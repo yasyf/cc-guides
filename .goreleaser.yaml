@@ -50,8 +50,24 @@ builds:
           - CGO_ENABLED=1
           - "CC=zig cc -target aarch64-linux-musl"
           - "CXX=zig c++ -target aarch64-linux-musl"
-      # darwin amd64/arm64 fall through to the build-level env (CGO_ENABLED=1,
-      # MACOSX_DEPLOYMENT_TARGET=12.0, native clang) with no CC override.
+      # darwin amd64/arm64 add the deployment floor to the cgo compile/link flags on top
+      # of the build-level env (CGO_ENABLED=1, MACOSX_DEPLOYMENT_TARGET=12.0, native clang),
+      # with no CC override. Go's build cache does NOT key on MACOSX_DEPLOYMENT_TARGET, so a
+      # warm cache populated under a newer SDK can supply cgo objects compiled to a higher
+      # effective minos while the final link still stamps 12.0 (observed: cached-object
+      # warnings for 26.0, binary reporting 12.0). -mmacosx-version-min IS part of the cgo
+      # build-cache key, so pinning it in CGO_CFLAGS/CGO_LDFLAGS forces a recompile when the
+      # target changes and holds every cgo object at the 12.0 floor.
+      - goos: darwin
+        goarch: amd64
+        env:
+          - CGO_CFLAGS=-mmacosx-version-min=12.0
+          - CGO_LDFLAGS=-mmacosx-version-min=12.0
+      - goos: darwin
+        goarch: arm64
+        env:
+          - CGO_CFLAGS=-mmacosx-version-min=12.0
+          - CGO_LDFLAGS=-mmacosx-version-min=12.0
     mod_timestamp: "{{ .CommitTimestamp }}"
     # Developer ID sign + notarize the darwin binaries via codesign + notarytool
     # (quill SIGKILLs on arm64 — anchore/quill#566), using the shared script the
