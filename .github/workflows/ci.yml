@@ -12,6 +12,14 @@ concurrency:
 permissions:
   contents: read
 
+# tree-sitter is cgo, so vet/test/build (and golangci-lint/govulncheck, which compile
+# too) all need CGO_ENABLED=1 and a C compiler. `go test -race` already forces cgo; the
+# GitHub-hosted ubuntu (gcc) and macOS (clang) runners have a native C toolchain, so no
+# zig is needed here (that is only for the release's cross-compile). Made explicit so a
+# future CGO_ENABLED default change can't silently drop tree-sitter from CI.
+env:
+  CGO_ENABLED: "1"
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}

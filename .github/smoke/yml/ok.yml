@@ -1,0 +1,3 @@
+# cc-guides release smoke: yaml fragment
+name: smoke
+on: push

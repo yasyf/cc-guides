@@ -1,0 +1,3 @@
+# cc-guides release smoke: toml fragment
+[smoke]
+ok = true

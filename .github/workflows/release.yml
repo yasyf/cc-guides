@@ -1,10 +1,11 @@
 name: Release
 
 # Every push to main auto-releases: release-go.yml@v1 tags v0.1.<run_number>, then
-# goreleaser builds (pure Go, quill-signed darwin binaries) and publishes the cask
-# plus bare per-OS/arch binary assets + checksums.txt (the Guides action downloads
-# those). github.run_number stays monotonic as long as this workflow file keeps its
-# path (.github/workflows/release.yml).
+# goreleaser builds (tree-sitter cgo — zig cross-compiles static-musl linux, native
+# clang builds darwin on the macOS runner, codesign+notarytool signs it) and publishes
+# the cask plus bare per-OS/arch binary assets + checksums.txt (the Guides action
+# downloads those). github.run_number stays monotonic as long as this workflow file
+# keeps its path (.github/workflows/release.yml).
 #
 # The gate is tests ONLY — deliberately no `cc-guides check` self-check here: a
 # fragment edit would fail its own gate and deadlock the very release that fixes it.
@@ -25,6 +26,8 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1" # tree-sitter is cgo; -race forces it, made explicit (gcc is on the runner)
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
@@ -38,4 +41,51 @@ jobs:
     uses: yasyf/homebrew-tap/.github/workflows/release-go.yml@v1
     secrets: inherit
     with:
+      # tree-sitter is cgo → native clang for darwin + zig for static-musl linux, so the
+      # release runs on macOS and signs with codesign+notarytool (not quill, which
+      # SIGKILLs arm64). Mirrors slop-cop (the other tree-sitter-cgo repo).
+      runner: macos-latest
+      signer: codesign
+      setup-zig: "0.16.0"
       auto-tag: true
+
+  # Per-platform binary smoke: download each PUBLISHED artifact and run it for real —
+  # --version plus linting the committed .github/smoke fixture, which exercises every cgo
+  # tree-sitter grammar + semantic decoder linked into the binary. The darwin cgo leg is
+  # the known silent-rot point; this matrix is why it exists.
+  #
+  # Published platform -> GitHub-hosted runner:
+  #   linux/amd64  -> ubuntu-latest      (smoked)
+  #   linux/arm64  -> ubuntu-24.04-arm   (smoked)
+  #   darwin/arm64 -> macos-latest       (smoked — the native-cgo silent-rot leg)
+  #   darwin/amd64 -> NO in-scope GitHub-hosted runner, so it is NOT smoked here. It is
+  #     built on macos-latest (clang -arch x86_64) and only that build step verifies it;
+  #     the free Intel macos-13 image is deprecated, so it is deliberately skipped.
+  smoke:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, os: linux, arch: amd64 }
+          - { runner: ubuntu-24.04-arm, os: linux, arch: arm64 }
+          - { runner: macos-latest, os: darwin, arch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download the published ${{ matrix.os }}/${{ matrix.arch }} binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "v0.1.${{ github.run_number }}" \
+            -R "${{ github.repository }}" \
+            -p "cc-guides_${{ matrix.os }}_${{ matrix.arch }}" \
+            -O cc-guides
+          chmod +x cc-guides
+      - name: Smoke — version + lint every kind grammar
+        run: |
+          set -euo pipefail
+          ./cc-guides --version
+          ./cc-guides --version | grep -qF "0.1.${{ github.run_number }}"
+          ./cc-guides lint .github/smoke
