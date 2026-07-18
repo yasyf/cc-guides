@@ -52,15 +52,17 @@ jobs:
   # Per-platform binary smoke: download each PUBLISHED artifact and run it for real —
   # --version plus linting the committed .github/smoke fixture, which exercises every cgo
   # tree-sitter grammar + semantic decoder linked into the binary. The darwin cgo leg is
-  # the known silent-rot point; this matrix is why it exists.
+  # the known silent-rot point; this matrix is why it exists. Each darwin leg additionally
+  # asserts the binary's LC_BUILD_VERSION minos is 12.0 (the goreleaser
+  # MACOSX_DEPLOYMENT_TARGET floor), so a builder-OS deployment-target regression can
+  # never ship silently.
   #
   # Published platform -> GitHub-hosted runner:
   #   linux/amd64  -> ubuntu-latest      (smoked)
   #   linux/arm64  -> ubuntu-24.04-arm   (smoked)
   #   darwin/arm64 -> macos-latest       (smoked — the native-cgo silent-rot leg)
-  #   darwin/amd64 -> NO in-scope GitHub-hosted runner, so it is NOT smoked here. It is
-  #     built on macos-latest (clang -arch x86_64) and only that build step verifies it;
-  #     the free Intel macos-13 image is deprecated, so it is deliberately skipped.
+  #   darwin/amd64 -> macos-15-intel     (smoked — GitHub's x86_64 macOS 15 image, the
+  #     last supported Intel runner, available through Aug 2027: actions/runner-images#13045)
   smoke:
     needs: release
     strategy:
@@ -70,6 +72,7 @@ jobs:
           - { runner: ubuntu-latest, os: linux, arch: amd64 }
           - { runner: ubuntu-24.04-arm, os: linux, arch: arm64 }
           - { runner: macos-latest, os: darwin, arch: arm64 }
+          - { runner: macos-15-intel, os: darwin, arch: amd64 }
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
@@ -89,3 +92,11 @@ jobs:
           ./cc-guides --version
           ./cc-guides --version | grep -qF "0.1.${{ github.run_number }}"
           ./cc-guides lint .github/smoke
+      - name: Assert darwin minimum-OS floor is 12.0
+        if: matrix.os == 'darwin'
+        run: |
+          set -euo pipefail
+          otool -l cc-guides | grep -A3 LC_BUILD_VERSION
+          minos=$(otool -l cc-guides | awk '/LC_BUILD_VERSION/{f=1} f&&/minos/{print $2; exit}')
+          echo "darwin/${{ matrix.arch }} minos=$minos"
+          test "$minos" = "12.0"
