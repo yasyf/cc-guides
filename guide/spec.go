@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unsafe"
 
+	tstoml "github.com/tree-sitter-grammars/tree-sitter-toml/bindings/go"
 	tsyaml "github.com/tree-sitter-grammars/tree-sitter-yaml/bindings/go"
 	ts "github.com/tree-sitter/go-tree-sitter"
 	tsbash "github.com/tree-sitter/tree-sitter-bash/bindings/go"
@@ -91,6 +92,15 @@ var specs = []spec{
 		syntax:   yamlSyntax,
 		semantic: LintYAML,
 	},
+	KindTOML: {
+		name:     "toml",
+		exts:     []string{".toml"},
+		strategy: strategyAppend, // concat: fragments are disjoint table sets, comments + marker survive
+		comment:  commentSyntax{open: "# ", match: "# "},
+		newMode:  0o644,
+		syntax:   tomlSyntax,
+		semantic: LintTOML, // BurntSushi decode catches a duplicate table, which tree-sitter cannot
+	},
 }
 
 // specOf returns the spec for a kind. Every Kind is minted by KindFromExt, so the
@@ -131,6 +141,34 @@ func (k Kind) Lint(body []byte) []string {
 		}
 	}
 	return out
+}
+
+// PostComposeValidate re-runs a kind's SEMANTIC validator over a COMPOSED artifact
+// body at render time — the first render-path validation. It catches the one class of
+// mistake per-fragment lint cannot see: two fragments each valid alone but composing
+// to a broken whole — the same TOML table defined in two of them, or a duplicate
+// top-level YAML key — which surfaces here, named against the target, rather than at
+// capt-hook parse time.
+//
+// Only the semantic validator runs, and only for an Append kind that has one. The
+// per-fragment tree-sitter SYNTAX check is deliberately NOT re-run post-compose: it is
+// a per-fragment purity check (a concatenation of syntactically-valid fragments stays
+// syntactically valid), and a composed shell artifact legitimately carries GitHub
+// Actions `${{ … }}` expressions that pass through verbatim — valid YAML, but which
+// tree-sitter-bash rejects (verified against the live fleet). Running the syntax check
+// post-compose would fail those legitimate renders; the semantic decoders (yaml/toml)
+// accept `${{ … }}` fine. Net effect: yml and toml gain post-compose validation; sh
+// (no semantic validator) and md (neither) are untouched, and a Merge kind (JSON) is
+// already validated structurally by its own codec.
+//
+// It is validation only: it inspects body and returns an error, never mutating it, so
+// rendered bytes are byte-identical to before this hook existed.
+func (k Kind) PostComposeValidate(body []byte) error {
+	s := specOf(k)
+	if s.strategy != strategyAppend || s.semantic == nil {
+		return nil
+	}
+	return s.semantic(body)
 }
 
 // extIndex maps every accepted extension (lowercase) to its kind.
@@ -185,14 +223,20 @@ var (
 	bashLang = tsbash.Language()
 	jsonLang = tsjson.Language()
 	yamlLang = tsyaml.Language()
+	tomlLang = tstoml.Language()
 )
 
 func bashSyntax(body []byte) error { return treeSitterSyntax(bashLang, ErrShellParse, body) }
 func jsonSyntax(body []byte) error {
 	return treeSitterSyntax(jsonLang, ErrJSONParse, jsonNeutralize(body))
 }
+
 func yamlSyntax(body []byte) error {
 	return treeSitterSyntax(yamlLang, ErrYAMLParse, yamlNeutralize(body))
+}
+
+func tomlSyntax(body []byte) error {
+	return treeSitterSyntax(tomlLang, ErrTOMLParse, tomlNeutralize(body))
 }
 
 // treeSitterSyntax parses src with the grammar and rejects on any ERROR or MISSING
@@ -222,4 +266,11 @@ func jsonNeutralize(body []byte) []byte {
 // as valid YAML scalars and distinct tokens stay distinct — mirrors LintYAML.
 func yamlNeutralize(body []byte) []byte {
 	return tokenRe.ReplaceAllFunc(body, func(m []byte) []byte { return m[2 : len(m)-2] })
+}
+
+// tomlNeutralize replaces every `{{token}}` with the scalar 0 so a placeholder-
+// bearing fragment parses as valid TOML in either key or value position — mirrors
+// jsonNeutralize (a bare identifier is not a valid TOML value, so 0, not the name).
+func tomlNeutralize(body []byte) []byte {
+	return tokenRe.ReplaceAll(body, []byte("0"))
 }

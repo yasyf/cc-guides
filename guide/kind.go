@@ -21,11 +21,14 @@ const (
 	KindJSON
 	// KindYAML is a YAML artifact (`# …` comments, ordered text concatenation).
 	KindYAML
+	// KindTOML is a TOML artifact (`# …` comments, ordered text concatenation of
+	// disjoint tables).
+	KindTOML
 )
 
 // AllKinds enumerates every supported kind; used to probe the alternate kind when
 // building a kind-mismatch diagnostic.
-var AllKinds = []Kind{KindMD, KindSH, KindJSON, KindYAML}
+var AllKinds = []Kind{KindMD, KindSH, KindJSON, KindYAML, KindTOML}
 
 // valid reports whether k indexes a registered spec.
 func (k Kind) valid() bool { return int(k) >= 0 && int(k) < len(specs) }

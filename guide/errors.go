@@ -47,4 +47,12 @@ var (
 
 	// ErrShellParse is a shell fragment that is not well-formed under the grammar.
 	ErrShellParse = errors.New("invalid shell fragment")
+
+	// ErrTOMLParse is a TOML fragment that is not well-formed under the grammar.
+	ErrTOMLParse = errors.New("invalid TOML fragment")
+
+	// ErrTOMLDecode is a TOML fragment (or a composed TOML artifact) that the strict
+	// decoder rejects — most usefully a table defined twice, which the grammar accepts
+	// but TOML semantics forbid.
+	ErrTOMLDecode = errors.New("invalid TOML")
 )

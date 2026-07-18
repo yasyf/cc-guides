@@ -131,6 +131,13 @@ func renderV3(ctx context.Context, cmd *cobra.Command, root string, dirs []strin
 		if err != nil {
 			return exit(2, fmt.Errorf("%s: %w", ad.dir, err))
 		}
+		// Post-compose validation: re-validate the composed body so an authoring
+		// mistake that only surfaces once fragments combine (e.g. the same TOML table
+		// in two of them) fails here, naming the target, rather than at capt-hook parse
+		// time. Validation only — it never mutates body, so rendered bytes are unchanged.
+		if err := ad.kind.PostComposeValidate(body); err != nil {
+			return exit(2, fmt.Errorf("%s: %w", ad.target, err))
+		}
 		final := body
 		if ad.kind.Markered() {
 			final = guide.AddMarker(ad.kind, ad.dir, body)
