@@ -28,7 +28,7 @@ func TargetForLayoutDir(dir string) (target string, kind Kind, err error) {
 	}
 	kind, err = KindForPath(rel)
 	if err != nil {
-		return "", 0, fmt.Errorf("layout dir %q: target %q must end in .md, .sh, .json, .yml, .yaml, or .toml: %w", dir, rel, err)
+		return "", 0, fmt.Errorf("layout dir %q: target %q must end in %s: %w", dir, rel, SupportedExtensions(), err)
 	}
 	if rel == FragmentsRoot || strings.HasPrefix(rel, FragmentsRoot+"/") {
 		return "", 0, fmt.Errorf("layout dir %q: target %q must not land back under %s", dir, rel, FragmentsRoot)

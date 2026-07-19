@@ -1,6 +1,7 @@
 package guide_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -62,5 +63,25 @@ func TestKindFromExt(t *testing.T) {
 		t.Error(".txt should error")
 	} else if !strings.Contains(err.Error(), ".yml") {
 		t.Errorf(".txt error must list .yml as supported: %v", err)
+	}
+}
+
+func TestExtensionDiagnostics(t *testing.T) {
+	const extensions = ".md, .sh, .json, .yml, .yaml, or .toml"
+	if got := guide.SupportedExtensions(); got != extensions {
+		t.Fatalf("SupportedExtensions() = %q, want %q", got, extensions)
+	}
+
+	dir := ".claude/fragments/notes.txt"
+	_, _, err := guide.TargetForLayoutDir(dir)
+	if err == nil {
+		t.Fatal("TargetForLayoutDir() succeeded, want error")
+	}
+	if !errors.Is(err, guide.ErrUnknownExt) {
+		t.Fatalf("TargetForLayoutDir() error = %v, want errors.Is(err, guide.ErrUnknownExt)", err)
+	}
+	want := `layout dir ".claude/fragments/notes.txt": target "notes.txt" must end in .md, .sh, .json, .yml, .yaml, or .toml: unsupported extension: ".txt" (supported: .md, .sh, .json, .yml, .yaml, or .toml)`
+	if err.Error() != want {
+		t.Fatalf("TargetForLayoutDir() error = %q, want %q", err, want)
 	}
 }

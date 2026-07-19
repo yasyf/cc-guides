@@ -213,15 +213,19 @@ var extIndex = func() map[string]Kind {
 	return m
 }()
 
-// supportedExts is the comma-joined extension list, in registry order, for the
-// unknown-extension diagnostic.
+// supportedExts is the human-readable extension list, in registry order, for
+// extension diagnostics.
 var supportedExts = func() string {
 	var all []string
 	for _, s := range specs {
 		all = append(all, s.exts...)
 	}
-	return strings.Join(all, ", ")
+	return strings.Join(all[:len(all)-1], ", ") + ", or " + all[len(all)-1]
 }()
+
+// SupportedExtensions returns the canonical human-readable list of extensions
+// accepted by the kind registry.
+func SupportedExtensions() string { return supportedExts }
 
 // mdTokenFree rejects a markdown fragment carrying a `{{token}}` placeholder — prose
 // is never token-substituted, so a token in it is a mistake.

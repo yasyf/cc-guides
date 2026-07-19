@@ -54,7 +54,7 @@ func KindFromExt(ext string) (Kind, error) {
 	if k, ok := extIndex[strings.ToLower(ext)]; ok {
 		return k, nil
 	}
-	return 0, fmt.Errorf("%w: %q (supported: %s)", ErrUnknownExt, ext, supportedExts)
+	return 0, fmt.Errorf("%w: %q (supported: %s)", ErrUnknownExt, ext, SupportedExtensions())
 }
 
 // KindForPath derives a Kind from a path's extension.

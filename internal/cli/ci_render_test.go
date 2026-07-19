@@ -19,15 +19,12 @@ func TestLockDiffPinsOnly(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "pins only — version and commit moved",
+			name: "version-only bump",
 			diff: headers +
 				"@@ -2 +2 @@\n" +
 				"-version = \"0.1.16\"\n" +
-				"+version = \"0.1.17\"\n" +
-				"@@ -9 +9 @@\n" +
-				"-commit = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n" +
-				"+commit = \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"\n",
-			want: true,
+				"+version = \"0.1.17\"\n",
+			want: false,
 		},
 		{
 			name: "commit-only bump",
@@ -36,6 +33,14 @@ func TestLockDiffPinsOnly(t *testing.T) {
 				"-commit = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n" +
 				"+commit = \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"\n",
 			want: true,
+		},
+		{
+			name: "local commit repair",
+			diff: headers +
+				"@@ -9 +9 @@\n" +
+				"-commit = \"local\"\n" +
+				"+commit = \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"\n",
+			want: false,
 		},
 		{
 			name: "semantic — spec changed",
@@ -71,14 +76,14 @@ func TestLockDiffPinsOnly(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "mixed — pins plus a spec",
+			name: "mixed version and commit pins",
 			diff: headers +
 				"@@ -2 +2 @@\n" +
 				"-version = \"0.1.16\"\n" +
 				"+version = \"0.1.17\"\n" +
-				"@@ -7 +7 @@\n" +
-				"-spec = \"github:yasyf/cc-skills@main\"\n" +
-				"+spec = \"github:yasyf/cc-skills@next\"\n",
+				"@@ -9 +9 @@\n" +
+				"-commit = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n" +
+				"+commit = \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"\n",
 			want: false,
 		},
 	}

@@ -40,7 +40,7 @@ func newCIRenderCmd(ctx context.Context) *cobra.Command {
 		Short: "Render, gate on a pins-only lock diff, then commit and push (CI use)",
 		Long: "Re-render every artifact, then reconcile the tree the way the fleet\n" +
 			"re-render loop does: nothing changed -> exit 0; only the lock's\n" +
-			"version/commit pins moved -> revert and skip (the committed lock still\n" +
+			"source commit pins moved -> revert and skip (the committed lock still\n" +
 			"reproduces the artifacts byte-for-byte); otherwise commit with the\n" +
 			"canonical message and push, refetching and retrying a rejected push up to\n" +
 			"three times. Intended for CI: reads GITHUB_REF_NAME for the push branch and\n" +
@@ -101,16 +101,14 @@ func runCIRender(ctx context.Context, cmd *cobra.Command, o ciRenderOpts) error 
 		}
 		if lockOnly {
 			// Lock-only change. Skip (and revert) ONLY if every changed lock line is a
-			// `version = ` or `commit = ` pin: a code-only cc-guides release moves those
-			// but leaves every artifact byte-identical (markers are version-free), and
-			// the committed lock still reproduces them. Any spec/schema/artifacts/header
-			// change is semantically required and must commit.
+			// `commit = ` pin. Any version/spec/schema/artifacts/header change is
+			// semantically required and must commit.
 			diff, derr := gitCapture(ctx, root, "diff", "--cached", "-U0", "--", lockfile.Path)
 			if derr != nil {
 				return exit(1, derr)
 			}
 			if lockDiffPinsOnly(diff) {
-				foutln(stderr, "only the lock's version/pins moved and artifacts are byte-identical — skipping commit; the committed lock still checks green")
+				foutln(stderr, "only the lock's source commit pins moved and artifacts are byte-identical — skipping commit; the committed lock still checks green")
 				if err := revertRender(ctx, root); err != nil {
 					return exit(1, err)
 				}
@@ -160,12 +158,12 @@ func runCIRender(ctx context.Context, cmd *cobra.Command, o ciRenderOpts) error 
 }
 
 // lockDiffPinsOnly reports whether every content line of a `git diff --cached -U0`
-// over the lock is a version/commit pin change — the signal that a code-only
-// cc-guides release moved the pins but left every artifact byte-identical, so the
-// re-render can be skipped. Any added/removed line that is not a `version = ` or
-// `commit = ` pin (a spec, schema, artifacts, or table-header change) makes it
-// false. Mirrors the historical awk gate exactly: file headers (+++/---) and hunk
-// headers (@@, diff --git, index) are not content.
+// over the lock is a source commit pin change. Any other added or removed line,
+// including a version change, makes it false. This deliberately diverges from the
+// historical awk gate: version-field movement must land so a poisoned or regressed
+// consumer lock self-heals on the next scheduled re-render. Removing the
+// CI-forbidden local commit pin must also land. File and hunk headers are not
+// content.
 func lockDiffPinsOnly(diff string) bool {
 	for _, line := range strings.Split(diff, "\n") {
 		if line == "" || (line[0] != '+' && line[0] != '-') {
@@ -174,8 +172,10 @@ func lockDiffPinsOnly(diff string) bool {
 		if strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---") {
 			continue
 		}
-		if strings.HasPrefix(line, "+version = ") || strings.HasPrefix(line, "-version = ") ||
-			strings.HasPrefix(line, "+commit = ") || strings.HasPrefix(line, "-commit = ") {
+		if line == `-commit = "local"` {
+			return false
+		}
+		if strings.HasPrefix(line, "+commit = ") || strings.HasPrefix(line, "-commit = ") {
 			continue
 		}
 		return false

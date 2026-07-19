@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/yasyf/cc-guides/guide"
+	"github.com/yasyf/cc-guides/internal/version"
 	"github.com/yasyf/cc-guides/layout"
 	"github.com/yasyf/cc-guides/lockfile"
 	"github.com/yasyf/cc-guides/source"
@@ -51,7 +52,7 @@ func newRenderCmd(ctx context.Context) *cobra.Command {
 func runRender(ctx context.Context, cmd *cobra.Command, args []string, o renderOpts) error {
 	stderr := cmd.ErrOrStderr()
 	root := repoRoot()
-	ver := lockVersion(o.lockVersion, stderr)
+	ver := lockVersion(o.lockVersion)
 	overrides, err := parseSourceOverrides(o.sources)
 	if err != nil {
 		return exit(2, err)
@@ -93,6 +94,21 @@ func renderV3(ctx context.Context, cmd *cobra.Command, root string, dirs []strin
 	existingLock, _, err := lockfile.Load(root)
 	if err != nil {
 		return exit(2, err)
+	}
+	if existingLock != nil {
+		explicitLockVersion := cmd.Flags().Changed("lock-version") && o.lockVersion != ""
+		if !explicitLockVersion {
+			if err := rejectVersionSkew(version.Bare(), existingLock.Version); err != nil {
+				return exit(2, err)
+			}
+		}
+		override := ""
+		if explicitLockVersion {
+			override = o.lockVersion
+		}
+		if err := rejectUnreleasedLockVersion(ver, existingLock.Version, override); err != nil {
+			return exit(2, err)
+		}
 	}
 	ads := make([]*artifactDir, 0, len(dirs))
 	layouts := map[string]*layout.Layout{}
@@ -176,6 +192,7 @@ func renderV3(ctx context.Context, cmd *cobra.Command, root string, dirs []strin
 		}
 	}
 
+	warnLockVersion(ver, cmd.ErrOrStderr())
 	if err := writeLock(root, ver, rendered, usedAliases, specs, resolver, existingLock, scoped); err != nil {
 		return err
 	}

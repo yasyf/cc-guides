@@ -84,7 +84,7 @@ func lintFile(root, path string) []string {
 	}
 	kind, err := guide.KindForPath(path)
 	if err != nil {
-		return []string{fmt.Sprintf("%s: unsupported extension (want .md, .sh, .json, .yml, or .toml)", rel)}
+		return []string{fmt.Sprintf("%s: unsupported extension (want %s)", rel, guide.SupportedExtensions())}
 	}
 	// The resolver reads a fragment ONLY at <pack>/<kind>/<name><ext>, so a kind
 	// dir must sit directly under the pack root: a fragment's path relative to the
