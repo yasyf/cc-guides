@@ -71,8 +71,18 @@ runs:
         else
           cc-guides check --diff || check_status=$?
         fi
+        latest="$(curl -fsSLI --max-time 5 -o /dev/null -w '%{url_effective}' \
+          "https://github.com/yasyf/cc-guides/releases/latest" || true)"
+        latest="${latest##*/tag/v}"
+        # A failed or redirect-free lookup leaves the full URL in url_effective; only
+        # a bare X.Y.Z-style string is usable as a version.
+        case "$latest" in ''|*[!0-9.]*) latest="" ;; esac
         if [ "$check_status" -ge 2 ]; then
-          echo "::error::cc-guides check could not run — the layouts, lock, and fragments disagree; run 'cc-guides render' locally and commit the fragments, artifacts, and lock together."
+          echo "::error::cc-guides check could not run — the layouts, lock, and fragments disagree; run a FULL 'cc-guides render' (no path arguments) with an up-to-date cc-guides and commit the fragments, artifacts, and lock together."
+          if [ -n "$latest" ] && [ "$LOCK_VERSION" != "$latest" ] && \
+            [ "$(printf '%s\n%s\n' "$LOCK_VERSION" "$latest" | sort -V | tail -n 1)" = "$latest" ]; then
+            echo "::error::this repo's lock pins cc-guides $LOCK_VERSION but the latest release is $latest — if the failure above mentions an unsupported target or extension, this is version skew (a stale binary's render downgraded the lock): upgrade cc-guides (brew upgrade cc-guides) and re-render fully, or trigger the Guides re-render workflow."
+          fi
           exit "$check_status"
         fi
         if [ "$check_status" -eq 1 ]; then
@@ -85,16 +95,11 @@ runs:
         newest="$LOCK_VERSION"
 
         # --- non-blocking freshness notice --------------------------------------
-        # A newer cc-guides binary no longer forces a fleet refresh: content lives
-        # in cc-skills, and a code-only release re-renders byte-identically (markers
-        # are version-free), so the re-render loop skips it. This only flags a very
-        # old binary.
-        latest="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
-          "https://github.com/yasyf/cc-guides/releases/latest" || true)"
-        latest="${latest##*/tag/v}"
+        # The daily re-render lands version bumps within a day, so this only flags
+        # a repo whose scheduled re-render is broken or disabled.
         if [ -n "$latest" ]; then
           if [ "$newest" != "$latest" ] && [ "$(printf '%s\n%s\n' "$newest" "$latest" | sort -V | tail -n 1)" = "$latest" ]; then
-            echo "::notice::guides rendered with cc-guides $newest; latest is $latest — non-blocking (the fleet re-render refreshes on content changes, not binary releases)."
+            echo "::notice::guides rendered with cc-guides $newest; latest is $latest — non-blocking (the daily re-render lands this version bump within a day)."
             {
               echo "### cc-guides freshness"
               echo "Rendered with **$newest**, latest release is **$latest**. Non-blocking."
