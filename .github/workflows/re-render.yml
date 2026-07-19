@@ -1,15 +1,8 @@
 name: Re-render guides
 
-# Reusable workflow: install the LATEST cc-guides, re-render every artifact, and
-# commit the result — unless the only change is the lock file (a code-only
-# cc-guides release bumps the lock's version/pins but markers are version-free, so
-# every artifact is byte-identical). In that case `cc-guides ci-render` skips: the
-# committed lock's older version still reproduces the same bytes and checks green
-# under the Guides action.
-#
-# Called from each repo's guides.yml on repository_dispatch (cc-guides-render),
-# schedule, or workflow_dispatch. GITHUB_TOKEN pushes don't retrigger workflows,
-# so the re-render commit cannot loop; the in-workflow self-check below covers it.
+# Fleet re-render: install latest cc-guides, `ci-render`, push. Deploy-key
+# pushes can touch workflows and retrigger CI; token pushes neither. Push
+# events run only the caller's check job — no loop.
 
 on:
   workflow_call: {}
@@ -22,6 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ssh-key: ${{ secrets.CC_GUIDES_DEPLOY_KEY }}
 
       - name: Install latest cc-guides
         uses: yasyf/cc-guides/install@action-v1
