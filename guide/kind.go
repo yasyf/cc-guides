@@ -24,11 +24,13 @@ const (
 	// KindTOML is a TOML artifact (`# …` comments, ordered text concatenation of
 	// disjoint tables).
 	KindTOML
+	// KindGitignore is a gitignore artifact (`# …` comments, ordered text concatenation).
+	KindGitignore
 )
 
 // AllKinds enumerates every supported kind; used to probe the alternate kind when
 // building a kind-mismatch diagnostic.
-var AllKinds = []Kind{KindMD, KindSH, KindJSON, KindYAML, KindTOML}
+var AllKinds = []Kind{KindMD, KindSH, KindJSON, KindYAML, KindTOML, KindGitignore}
 
 // valid reports whether k indexes a registered spec.
 func (k Kind) valid() bool { return int(k) >= 0 && int(k) < len(specs) }

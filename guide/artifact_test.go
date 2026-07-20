@@ -20,6 +20,8 @@ func TestTargetForLayoutDir(t *testing.T) {
 		{dir: ".claude/fragments/great-docs.yml", want: "great-docs.yml"},
 		{dir: ".claude/fragments/.github/workflows/docs.yml", want: ".github/workflows/docs.yml"}, // nested yml target
 		{dir: ".claude/fragments/.pre-commit-config.yaml", want: ".pre-commit-config.yaml"},       // root dotfile .yaml target
+		{dir: ".claude/fragments/.gitignore", want: ".gitignore"},                                 // root gitignore target
+		{dir: ".claude/fragments/docs/.gitignore", want: "docs/.gitignore"},                       // nested gitignore target
 		{dir: "AGENTS.md", wantErr: true},                                                         // not under the fragments root
 		{dir: ".claude/fragments/notes.txt", wantErr: true},                                       // unsupported extension
 		{dir: ".claude/fragments/../../etc/passwd.md", wantErr: true},                             // escapes via ..
@@ -64,10 +66,22 @@ func TestKindFromExt(t *testing.T) {
 	} else if !strings.Contains(err.Error(), ".yml") {
 		t.Errorf(".txt error must list .yml as supported: %v", err)
 	}
+	// filepath.Ext(".gitignore") is the whole dotfile name, so a root or nested
+	// .gitignore target dispatches to KindGitignore unchanged.
+	if k, err := guide.KindForPath(".gitignore"); err != nil {
+		t.Errorf(".gitignore: %v", err)
+	} else if k != guide.KindGitignore {
+		t.Errorf("KindForPath(\".gitignore\") = %v, want KindGitignore", k)
+	}
+	if k, err := guide.KindForPath("docs/.gitignore"); err != nil {
+		t.Errorf("docs/.gitignore: %v", err)
+	} else if k != guide.KindGitignore {
+		t.Errorf("KindForPath(\"docs/.gitignore\") = %v, want KindGitignore", k)
+	}
 }
 
 func TestExtensionDiagnostics(t *testing.T) {
-	const extensions = ".md, .sh, .json, .yml, .yaml, or .toml"
+	const extensions = ".md, .sh, .json, .yml, .yaml, .toml, or .gitignore"
 	if got := guide.SupportedExtensions(); got != extensions {
 		t.Fatalf("SupportedExtensions() = %q, want %q", got, extensions)
 	}
@@ -80,7 +94,7 @@ func TestExtensionDiagnostics(t *testing.T) {
 	if !errors.Is(err, guide.ErrUnknownExt) {
 		t.Fatalf("TargetForLayoutDir() error = %v, want errors.Is(err, guide.ErrUnknownExt)", err)
 	}
-	want := `layout dir ".claude/fragments/notes.txt": target "notes.txt" must end in .md, .sh, .json, .yml, .yaml, or .toml: unsupported extension: ".txt" (supported: .md, .sh, .json, .yml, .yaml, or .toml)`
+	want := `layout dir ".claude/fragments/notes.txt": target "notes.txt" must end in .md, .sh, .json, .yml, .yaml, .toml, or .gitignore: unsupported extension: ".txt" (supported: .md, .sh, .json, .yml, .yaml, .toml, or .gitignore)`
 	if err.Error() != want {
 		t.Fatalf("TargetForLayoutDir() error = %q, want %q", err, want)
 	}

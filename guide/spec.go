@@ -138,6 +138,13 @@ var specs = []spec{
 		semantic:   LintTOML, // BurntSushi decode catches a duplicate table, which tree-sitter cannot
 		opener:     &openerConstraint{kinds: []string{"table", "table_array_element"}, wrap: ErrTOMLRootKey},
 	},
+	KindGitignore: {
+		name:     "gitignore",
+		exts:     []string{".gitignore"},
+		category: catAppend,
+		comment:  commentSyntax{open: "# ", match: "# "},
+		newMode:  0o644,
+	},
 }
 
 // specOf returns the spec for a kind. Every Kind is minted by KindFromExt, so the

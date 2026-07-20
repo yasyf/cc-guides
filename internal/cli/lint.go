@@ -21,8 +21,9 @@ func newLintCmd() *cobra.Command {
 		Long: "Verify every fragment under <dir> (e.g. a content repo's guides/) is pure:\n" +
 			"LF-only, exactly one trailing newline, non-empty, an extension matching its\n" +
 			"kind subdir, markdown token-free, shell fragments carrying a shebang and no\n" +
-			"leftover mustache markers, json fragments a well-formed object, and yaml/toml\n" +
-			"fragments well-formed (tokens allowed in all). Exit 1 on any violation.",
+			"leftover mustache markers, json fragments a well-formed object, yaml/toml\n" +
+			"fragments well-formed (tokens allowed in all), and gitignore fragments needing\n" +
+			"only the universal purity checks. Exit 1 on any violation.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runLint(cmd, args[0])
