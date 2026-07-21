@@ -1,34 +1,70 @@
 name: Guides
 
-# Rendered-artifact freshness (check on push/PR) + fleet re-render (on
-# cc-guides release dispatch / weekly belt / manual). Stub scaffolded by
-# repo-bootstrap; the machinery lives in yasyf/cc-guides.
+# The single cc-guides brain, dual-mode: consumers shim onto it via
+# `uses: yasyf/cc-guides/.github/workflows/guides.yml@main`; cc-guides itself
+# dogfoods it through the direct triggers below.
 
 on:
+  workflow_call: {}
   push:
     branches: [main]
   pull_request:
-  repository_dispatch:
-    types: [cc-guides-render]
   schedule:
     - cron: "17 9 * * *"
   workflow_dispatch:
+  repository_dispatch:
+    types: [cc-guides-render]
 
+# Routing keys off github.event_name, which in a workflow_call run is the
+# CALLER's event — identical in both modes.
 jobs:
-  check:
-    if: github.event_name == 'push' || github.event_name == 'pull_request'
+  # CI is the sole writer of rendered artifacts: install latest, ci-render, then
+  # deploy-key push so the commit retriggers downstream (the Guides run no-ops).
+  render:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-      - uses: yasyf/cc-guides@action-v1
-
-  re-render:
-    if: github.event_name == 'repository_dispatch' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
     concurrency:
       group: cc-guides-render
       cancel-in-progress: false
-    uses: yasyf/cc-guides/.github/workflows/re-render.yml@action-v1
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ssh-key: ${{ secrets.CC_GUIDES_DEPLOY_KEY }}
+
+      - name: Install latest cc-guides
+        uses: yasyf/cc-guides/install@main
+        with:
+          version: latest
+
+      - name: Render, reconcile, commit, push
+        id: commit
+        shell: bash
+        run: cc-guides ci-render
+
+      - name: Self-check (only when a commit was pushed)
+        if: steps.commit.outputs.pushed == '1'
+        shell: bash
+        run: cc-guides check --diff
+
+  # On a PR nothing is written: fail if the PR hand-edits a CI-owned artifact,
+  # pointing the author at the fragment dir to edit instead.
+  pr-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install latest cc-guides
+        uses: yasyf/cc-guides/install@main
+        with:
+          version: latest
+
+      - name: Verify no CI-owned artifact was hand-edited
+        shell: bash
+        run: cc-guides pr-check "${{ github.event.pull_request.base.sha }}"
