@@ -13,12 +13,11 @@ cc-guides/
 ├── lockfile/              # cc-guides.lock read/merge/write
 ├── source/                # github:owner/repo fragment resolution + cache
 ├── internal/
-│   ├── cli/               # cobra command tree: render, check, lint, ci-render, list, cat
+│   ├── cli/               # cobra command tree: render, check, pr-check, lint, ci-render, list, cat
 │   ├── version/           # build version, stamped via -ldflags
 │   └── log/               # slog setup
-├── action.yml             # the consumer "Guides check" composite action (@action-v1)
 ├── install/               # release-binary install action
-├── .github/               # workflows: CI, release, reusable re-render
+├── .github/               # workflows: CI, release, and the dual-mode reusable Guides workflow
 ├── AGENTS.md              # This file — shared conventions
 └── README.md              # Project overview
 ```
