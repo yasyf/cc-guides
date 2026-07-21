@@ -60,6 +60,7 @@ func NewRootCmd(ctx context.Context) *cobra.Command {
 		newRenderCmd(ctx),
 		newCheckCmd(ctx),
 		newCIRenderCmd(ctx),
+		newPRCheckCmd(ctx),
 		newLintCmd(),
 		newListCmd(),
 		newCatCmd(ctx),
