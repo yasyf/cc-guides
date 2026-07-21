@@ -88,7 +88,7 @@ $ echo "exit: $?"
 exit: 1
 ```
 
-A fragment-only PR passes (`cc-guides: no CI-owned artifact was hand-edited`); the artifacts it implies land in the render commit right after merge. With a `CC_GUIDES_DEPLOY_KEY` repo secret (a deploy key with write access), the render commit pushes over SSH and still triggers your other workflows; without one, checkout falls back to `GITHUB_TOKEN` and the commit triggers nothing downstream.
+A fragment-only PR passes (`cc-guides: no CI-owned artifact was hand-edited`); the artifacts it implies land in the render commit right after merge. With a `CC_GUIDES_DEPLOY_KEY` repo secret (a deploy key with write access), the render commit pushes over SSH and still triggers your other workflows; without one, checkout falls back to `GITHUB_TOKEN` and the commit triggers nothing downstream. Adopting this outside a single-owner fleet? Pin the `uses:` ref to a release tag or commit SHA instead of `@main`, and pass the deploy key explicitly instead of `secrets: inherit` — the shim above trusts this repo's main branch with every secret the job can see.
 
 `check` stays the local verifier: it re-composes each target in memory — pinned to the commits the lock records — and byte-compares against disk:
 
