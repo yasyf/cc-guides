@@ -19,11 +19,10 @@ import (
 )
 
 type renderOpts struct {
-	stdout      bool
-	dryRun      bool
-	force       bool
-	lockVersion string
-	sources     []string
+	stdout  bool
+	dryRun  bool
+	force   bool
+	sources []string
 }
 
 func newRenderCmd(ctx context.Context) *cobra.Command {
@@ -44,7 +43,6 @@ func newRenderCmd(ctx context.Context) *cobra.Command {
 	f.BoolVar(&o.stdout, "stdout", false, "write rendered output to stdout instead of files")
 	f.BoolVar(&o.dryRun, "dry-run", false, "report what would be written without writing")
 	f.BoolVar(&o.force, "force", false, "overwrite an artifact even if cc-guides does not manage it")
-	f.StringVar(&o.lockVersion, "lock-version", "", "override the version stamped into the lock")
 	f.StringArrayVar(&o.sources, "source", nil, "override a source alias: --source alias=<github:spec|localdir> (repeatable)")
 	return cmd
 }
@@ -52,7 +50,7 @@ func newRenderCmd(ctx context.Context) *cobra.Command {
 func runRender(ctx context.Context, cmd *cobra.Command, args []string, o renderOpts) error {
 	stderr := cmd.ErrOrStderr()
 	root := repoRoot()
-	ver := lockVersion(o.lockVersion)
+	ver := version.Bare()
 	overrides, err := parseSourceOverrides(o.sources)
 	if err != nil {
 		return exit(2, err)
@@ -94,21 +92,6 @@ func renderV3(ctx context.Context, cmd *cobra.Command, root string, dirs []strin
 	existingLock, _, err := lockfile.Load(root)
 	if err != nil {
 		return exit(2, err)
-	}
-	if existingLock != nil {
-		explicitLockVersion := cmd.Flags().Changed("lock-version") && o.lockVersion != ""
-		if !explicitLockVersion {
-			if err := rejectVersionSkew(version.Bare(), existingLock.Version); err != nil {
-				return exit(2, err)
-			}
-		}
-		override := ""
-		if explicitLockVersion {
-			override = o.lockVersion
-		}
-		if err := rejectUnreleasedLockVersion(ver, existingLock.Version, override); err != nil {
-			return exit(2, err)
-		}
 	}
 	ads := make([]*artifactDir, 0, len(dirs))
 	layouts := map[string]*layout.Layout{}
@@ -192,7 +175,6 @@ func renderV3(ctx context.Context, cmd *cobra.Command, root string, dirs []strin
 		}
 	}
 
-	warnLockVersion(ver, cmd.ErrOrStderr())
 	if err := writeLock(root, ver, rendered, usedAliases, specs, resolver, existingLock, scoped); err != nil {
 		return err
 	}

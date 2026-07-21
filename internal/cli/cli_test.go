@@ -137,24 +137,28 @@ func TestCheckStaleAndMissing(t *testing.T) {
 
 // Cross-version: an artifact rendered by one binary version checks OK under a
 // different one — the marker is version-free and check reproduces the body from
-// the lock's pins, never a version token.
+// the lock's pins, never a version token. The lock's version is pure provenance.
 func TestCheckSelfPinningCrossVersion(t *testing.T) {
 	repo(t)
 	fixture := guidesFixture(t)
 	write(t, ".claude/fragments/AGENTS.md/layout.toml", "fragments = [\"cc-skills:ccx\"]\n"+ccSkillsSource)
 
-	if code, _, errout := exec("render", "--lock-version", "9.9.9", "--source", srcFlag(fixture)); code != 0 {
+	if code, _, errout := exec("render", "--source", srcFlag(fixture)); code != 0 {
 		t.Fatalf("render exit = %d: %s", code, errout)
 	}
 	disk, _ := os.ReadFile("AGENTS.md")
 	if firstLine(string(disk)) != mdMarker(".claude/fragments/AGENTS.md") {
 		t.Fatalf("marker must be version-free: %q", firstLine(string(disk)))
 	}
-	lock, _ := os.ReadFile(".claude/fragments/cc-guides.lock")
-	if !strings.Contains(string(lock), `version = "9.9.9"`) {
-		t.Fatalf("lock must record the render version:\n%s", lock)
+	// Rewrite only the lock's provenance version: check must ignore it (the body
+	// reproduces from the pins, no version compare) and never false-STALE.
+	lockPath := ".claude/fragments/cc-guides.lock"
+	lock, _ := os.ReadFile(lockPath)
+	rewritten := strings.Replace(string(lock), `version = "dev"`, `version = "9.9.9"`, 1)
+	if rewritten == string(lock) {
+		t.Fatalf("expected a dev version to rewrite:\n%s", lock)
 	}
-	// The running test binary is version "dev"; check must NOT false-STALE.
+	write(t, lockPath, rewritten)
 	if code, out, errout := exec("check", "--source", srcFlag(fixture)); code != 0 || out != "OK\tAGENTS.md\n" {
 		t.Fatalf("cross-version check: code=%d out=%q err=%s", code, out, errout)
 	}

@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -189,79 +188,6 @@ func collectDirs(root string, args []string) ([]string, error) {
 	}
 	sort.Strings(dirs)
 	return dirs, nil
-}
-
-func lockVersion(override string) string {
-	if override == "" {
-		return version.Bare()
-	}
-	return strings.TrimPrefix(override, "v")
-}
-
-func warnLockVersion(v string, stderr io.Writer) {
-	if v == "dev" {
-		foutln(stderr, "cc-guides: warning: recording a 'dev' version in the lock; artifacts will not match a released build (pass --lock-version or build with -ldflags)")
-	}
-}
-
-type releaseVersion [3]int
-
-func parseReleaseVersion(v string) (releaseVersion, bool) {
-	parts := strings.Split(v, ".")
-	if len(parts) != 3 {
-		return releaseVersion{}, false
-	}
-	var parsed releaseVersion
-	for i, part := range parts {
-		if part == "" {
-			return releaseVersion{}, false
-		}
-		for _, c := range part {
-			if c < '0' || c > '9' {
-				return releaseVersion{}, false
-			}
-		}
-		n, err := strconv.Atoi(part)
-		if err != nil {
-			return releaseVersion{}, false
-		}
-		parsed[i] = n
-	}
-	return parsed, true
-}
-
-func compareReleaseVersions(a, b releaseVersion) int {
-	for i := range a {
-		if a[i] < b[i] {
-			return -1
-		}
-		if a[i] > b[i] {
-			return 1
-		}
-	}
-	return 0
-}
-
-func rejectVersionSkew(binary, locked string) error {
-	binaryVersion, binaryOK := parseReleaseVersion(binary)
-	lockVersion, lockOK := parseReleaseVersion(locked)
-	if !binaryOK || !lockOK || compareReleaseVersions(binaryVersion, lockVersion) >= 0 {
-		return nil
-	}
-	return fmt.Errorf("%w %s; this binary is %s — upgrade: brew upgrade cc-guides", errVersionSkew, locked, binary)
-}
-
-func rejectUnreleasedLockVersion(effective, locked, override string) error {
-	if _, lockOK := parseReleaseVersion(locked); !lockOK {
-		return nil
-	}
-	if _, effectiveOK := parseReleaseVersion(effective); effectiveOK {
-		return nil
-	}
-	if override != "" {
-		return fmt.Errorf("%w: --lock-version %q is not a release version (want X.Y.Z)", errUnreleasedLockVersion, override)
-	}
-	return fmt.Errorf("%w: lock is %s, render would record %s; use a released cc-guides binary or pass --lock-version", errUnreleasedLockVersion, locked, effective)
 }
 
 // discoveredSpecs unions the [sources.*] of every artifact dir in the repo with

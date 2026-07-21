@@ -12,7 +12,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/yasyf/cc-guides/guide"
-	"github.com/yasyf/cc-guides/internal/version"
 	"github.com/yasyf/cc-guides/lockfile"
 	"github.com/yasyf/cc-guides/source"
 )
@@ -24,14 +23,6 @@ var errLockStale = errors.New("lock out of date — run cc-guides render")
 // errNoLock is an artifact dir with no entry in the repo lock file — check has
 // nothing to pin against, so the repo must render first.
 var errNoLock = errors.New("no cc-guides.lock entry — run 'cc-guides render'")
-
-// errVersionSkew is a released binary older than the released version recorded
-// in the lock — the binary must be upgraded before render or check can proceed.
-var errVersionSkew = errors.New("artifacts were last rendered by cc-guides")
-
-// errUnreleasedLockVersion prevents render from replacing a released lock
-// version with a development or git-describe pseudo-version.
-var errUnreleasedLockVersion = errors.New("refusing to replace a released cc-guides lock with an unreleased version")
 
 type checkOpts struct {
 	diff    bool
@@ -81,11 +72,6 @@ func runCheck(ctx context.Context, cmd *cobra.Command, args []string, o checkOpt
 	lock, _, err := lockfile.Load(root)
 	if err != nil {
 		return exit(2, err)
-	}
-	if lock != nil {
-		if err := rejectVersionSkew(version.Bare(), lock.Version); err != nil {
-			return exit(2, err)
-		}
 	}
 
 	worst := 0
