@@ -1,6 +1,7 @@
 name: Release
 
-# Every push to main auto-releases: release-go.yml@v1 tags v0.1.<run_number>, then
+# Every push to main auto-releases: the pinned release-go workflow tags
+# v0.1.<run_number>, then
 # goreleaser builds (tree-sitter cgo — zig cross-compiles static-musl linux, native
 # clang builds darwin on the macOS runner, codesign+notarytool signs it) and publishes
 # the cask plus bare per-OS/arch binary assets + checksums.txt (the Guides action
@@ -38,7 +39,7 @@ jobs:
 
   release:
     needs: test
-    uses: yasyf/homebrew-tap/.github/workflows/release-go.yml@v1
+    uses: yasyf/homebrew-tap/.github/workflows/release-go.yml@3bfe1af3bdc10ec783e79050e7c647152a537801
     secrets: inherit
     with:
       # tree-sitter is cgo → native clang for darwin + zig for static-musl linux, so the
