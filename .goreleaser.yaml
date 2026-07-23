@@ -2,7 +2,7 @@
 # cc-guides links tree-sitter (cgo), so every target builds with CGO_ENABLED=1: linux
 # cross-compiles with `zig cc` (static musl), darwin builds natively with clang on the
 # macOS runner. The release runs on macos-latest and signs with codesign+notarytool
-# (not quill — quill SIGKILLs arm64). Validate locally: goreleaser release --snapshot --clean
+# (not quill — quill SIGKILLs arm64). Validate locally: goreleaser check
 version: 2
 
 project_name: cc-guides
@@ -71,11 +71,11 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     # Developer ID sign + notarize the darwin binaries via codesign + notarytool
     # (quill SIGKILLs on arm64 — anchore/quill#566), using the shared script the
-    # import-developer-id action drops on the runner ($MACOS_CODESIGN_SCRIPT). Guarded
-    # so a local `goreleaser release --snapshot` (no signing env) is a clean no-op.
+    # import-developer-id action drops on the runner ($MACOS_CODESIGN_SCRIPT). The
+    # unguarded call makes a missing signer fail before any release can be published.
     hooks:
       post:
-        - cmd: sh -c 'if [ -n "${MACOS_CODESIGN_SCRIPT:-}" ]; then bash "$MACOS_CODESIGN_SCRIPT" "$1" "$2"; fi' -- "{{ .Path }}" "{{ .Target }}"
+        - cmd: bash "{{ .Env.MACOS_CODESIGN_SCRIPT }}" "{{ .Path }}" "{{ .Target }}"
           output: true
 
 archives:
@@ -98,8 +98,8 @@ archives:
 # Darwin signing/notarization is native codesign + notarytool via the build post-hook
 # above (the import-developer-id action drops $MACOS_CODESIGN_SCRIPT on the macOS
 # runner) — not goreleaser's quill signer, which SIGKILLs arm64 (anchore/quill#566).
-# Both no-op when the MACOS_* secrets are unset, so a release without Apple creds still
-# ships (unsigned). See reference/go-ci-and-release.md § native codesign.
+# The shared release workflow requires all signing and notarization credentials before
+# invoking goreleaser. See reference/go-ci-and-release.md § native codesign.
 
 checksum:
   name_template: checksums.txt
@@ -123,13 +123,6 @@ homebrew_casks:
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: https://github.com/yasyf/cc-guides
     description: Canonical agent guides as a shipped Go binary — render AGENTS.md, CLAUDE.md, and shell artifacts from embedded, versioned fragments
-    # Strip the quarantine attribute so the (notarized, or unsigned) binary runs on first launch.
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/cc-guides"]
-          end
 
 release:
   prerelease: auto
