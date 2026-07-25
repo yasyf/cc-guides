@@ -73,6 +73,7 @@ func runCIRender(ctx context.Context, cmd *cobra.Command, o ciRenderOpts) error 
 		return exit(1, err)
 	}
 
+	branch := os.Getenv("GITHUB_REF_NAME")
 	pushed := false
 	landed := false
 	for attempt := 1; attempt <= ciRenderAttempts; attempt++ {
@@ -131,7 +132,7 @@ func runCIRender(ctx context.Context, cmd *cobra.Command, o ciRenderOpts) error 
 		if err := mustGit(ctx, root, "commit", "-m", msg); err != nil {
 			return exit(1, err)
 		}
-		ok, err := gitPush(ctx, root)
+		ok, err := gitPush(ctx, root, branch)
 		if err != nil {
 			return exit(1, err)
 		}
@@ -144,7 +145,7 @@ func runCIRender(ctx context.Context, cmd *cobra.Command, o ciRenderOpts) error 
 		if err := mustGit(ctx, root, "fetch", "origin"); err != nil {
 			return exit(1, err)
 		}
-		if err := mustGit(ctx, root, "reset", "--hard", "origin/"+os.Getenv("GITHUB_REF_NAME")); err != nil {
+		if err := mustGit(ctx, root, "reset", "--hard", "origin/"+branch); err != nil {
 			return exit(1, err)
 		}
 	}
@@ -324,11 +325,16 @@ func stagedIsLockOnly(ctx context.Context, dir string) (bool, error) {
 	return strings.TrimSpace(out) == lockfile.Path, nil
 }
 
-// gitPush pushes the current branch. ok is true on a clean push; a rejected push
-// (any non-zero exit) returns ok false so the caller can refetch and retry. err is
-// non-nil only when git could not be started.
-func gitPush(ctx context.Context, dir string) (ok bool, err error) {
-	_, _, code, err := runGit(ctx, dir, "push")
+// gitPush pushes HEAD to branch on origin — CI checks out the exact caller commit,
+// so HEAD is detached and a bare `git push` has no upstream; an empty branch
+// (outside CI) falls back to the bare push. ok is false on a rejected push so the
+// caller can refetch and retry; err is non-nil only when git could not be started.
+func gitPush(ctx context.Context, dir, branch string) (ok bool, err error) {
+	args := []string{"push"}
+	if branch != "" {
+		args = []string{"push", "origin", "HEAD:refs/heads/" + branch}
+	}
+	_, _, code, err := runGit(ctx, dir, args...)
 	if err != nil {
 		return false, err
 	}

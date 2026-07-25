@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -148,5 +149,51 @@ func TestSourcePinsMatchesEncodedLock(t *testing.T) {
 	want := "cc-skills@" + strings.Repeat("a", 12) + ",team@" + strings.Repeat("b", 12)
 	if got := sourcePins(lk.Encode()); got != want {
 		t.Fatalf("sourcePins over encoded lock = %q, want %q", got, want)
+	}
+}
+
+// TestGitPushDetachedHead: CI checks out the exact caller commit (detached HEAD),
+// where a bare `git push` has no upstream — the explicit refspec must land it.
+func TestGitPushDetachedHead(t *testing.T) {
+	ctx := context.Background()
+	origin := t.TempDir()
+	work := t.TempDir()
+	git := func(dir string, args ...string) {
+		t.Helper()
+		if err := mustGit(ctx, dir, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git(origin, "init", "--bare", "--initial-branch=main", ".")
+	git(work, "init", "--initial-branch=main", ".")
+	git(work, "config", "user.name", "test")
+	git(work, "config", "user.email", "test@example.com")
+	git(work, "remote", "add", "origin", origin)
+	git(work, "commit", "--allow-empty", "-m", "seed")
+	git(work, "push", "origin", "main")
+	head, err := gitCapture(ctx, work, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	git(work, "checkout", "--detach", strings.TrimSpace(head))
+	git(work, "commit", "--allow-empty", "-m", "re-render")
+
+	ok, err := gitPush(ctx, work, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("push from detached HEAD was rejected")
+	}
+	originMain, err := gitCapture(ctx, origin, "rev-parse", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workHead, err := gitCapture(ctx, work, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(originMain) != strings.TrimSpace(workHead) {
+		t.Fatalf("origin main = %q, want %q", strings.TrimSpace(originMain), strings.TrimSpace(workHead))
 	}
 }
