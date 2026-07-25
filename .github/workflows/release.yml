@@ -1,12 +1,10 @@
 name: Release
 
-# Every push to main auto-releases: the pinned release-go workflow tags
-# v0.1.<run_number>, then
-# goreleaser builds (tree-sitter cgo — zig cross-compiles static-musl linux, native
+# A signed v* tag on main releases through the pinned shared release workflow.
+# Goreleaser builds (tree-sitter cgo — zig cross-compiles static-musl linux, native
 # clang builds darwin on the macOS runner, codesign+notarytool signs it) and publishes
 # the cask plus bare per-OS/arch binary assets + checksums.txt (the Guides action
-# downloads those). github.run_number stays monotonic as long as this workflow file
-# keeps its path (.github/workflows/release.yml).
+# downloads those).
 #
 # The gate is tests ONLY — deliberately no `cc-guides check` self-check here: a
 # fragment edit would fail its own gate and deadlock the very release that fixes it.
@@ -14,8 +12,7 @@ name: Release
 
 on:
   push:
-    branches: [main]
-  workflow_dispatch:
+    tags: ["v*"]
 
 permissions:
   contents: write
@@ -39,7 +36,7 @@ jobs:
 
   release:
     needs: test
-    uses: yasyf/homebrew-tap/.github/workflows/release-go.yml@52b26a1684d94ae2669d124f844148deaa4f5baf
+    uses: yasyf/homebrew-tap/.github/workflows/release-go.yml@7cc8a6c981cbec10fcb7f19bd75b36e9ee65ea7e
     secrets: inherit
     with:
       # tree-sitter is cgo → native clang for darwin + zig for static-musl linux, so the
@@ -48,7 +45,6 @@ jobs:
       runner: macos-latest
       signer: codesign
       setup-zig: "0.16.0"
-      auto-tag: true
 
   # Per-platform binary smoke: download each PUBLISHED artifact and run it for real —
   # --version plus linting the committed .github/smoke fixture, which exercises every cgo
@@ -82,7 +78,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release download "v0.1.${{ github.run_number }}" \
+          gh release download "$GITHUB_REF_NAME" \
             -R "${{ github.repository }}" \
             -p "cc-guides_${{ matrix.os }}_${{ matrix.arch }}" \
             -O cc-guides
@@ -90,8 +86,9 @@ jobs:
       - name: Smoke — version + lint every kind grammar
         run: |
           set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
           ./cc-guides --version
-          ./cc-guides --version | grep -qF "0.1.${{ github.run_number }}"
+          ./cc-guides --version | grep -qF "$VERSION"
           ./cc-guides lint .github/smoke
       - name: Assert darwin minimum-OS floor is 12.0
         if: matrix.os == 'darwin'
