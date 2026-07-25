@@ -5,13 +5,23 @@ name: Guides
 # dogfoods it through the direct triggers below.
 
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      commit:
+        description: Exact caller commit to render and verify
+        required: false
+        type: string
   push:
     branches: [main]
   pull_request:
   schedule:
     - cron: "17 9 * * *"
   workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact commit to render and verify
+        required: true
+        type: string
   repository_dispatch:
     types: [cc-guides-render]
 
@@ -31,6 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.commit || github.sha }}
           ssh-key: ${{ secrets.CC_GUIDES_DEPLOY_KEY }}
 
       - name: Install latest cc-guides
@@ -58,6 +69,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.commit || github.sha }}
           fetch-depth: 0
 
       - name: Install latest cc-guides
