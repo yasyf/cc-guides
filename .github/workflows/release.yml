@@ -1,6 +1,6 @@
 name: Release
 
-# A signed v* tag on main releases through the pinned shared release workflow.
+# A v* tag on main releases through the pinned shared release workflow.
 # Goreleaser builds (tree-sitter cgo — zig cross-compiles static-musl linux, native
 # clang builds darwin on the macOS runner, codesign+notarytool signs it) and publishes
 # the cask plus bare per-OS/arch binary assets + checksums.txt (the Guides action
@@ -36,7 +36,7 @@ jobs:
 
   release:
     needs: test
-    uses: yasyf/homebrew-tap/.github/workflows/release-go.yml@7cc8a6c981cbec10fcb7f19bd75b36e9ee65ea7e
+    uses: yasyf/homebrew-tap/.github/workflows/release-go.yml@41f8de6765b3b833ef333b0b98f5683f0e46685b
     secrets: inherit
     with:
       # tree-sitter is cgo → native clang for darwin + zig for static-musl linux, so the
