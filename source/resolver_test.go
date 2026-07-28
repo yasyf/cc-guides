@@ -171,6 +171,8 @@ func TestCachePrefixAmbiguousIsFatal(t *testing.T) {
 	}
 }
 
+// A manifest-less local dir is the guides dir itself — every kind resolves
+// straight out of its kind subdirs.
 func TestResolveLocalDir(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFixture(t, dir)
@@ -182,8 +184,75 @@ func TestResolveLocalDir(t *testing.T) {
 	if string(body) != "## Compact Context\nbody\n" {
 		t.Fatalf("body = %q", body)
 	}
+	jbody, found, err := r.Resolve(context.Background(), "cc-skills", "settings-base", guide.KindJSON)
+	if err != nil || !found {
+		t.Fatalf("local json resolve: found=%v err=%v", found, err)
+	}
+	if string(jbody) != "{\n  \"model\": \"opus\"\n}\n" {
+		t.Fatalf("json body = %q", jbody)
+	}
 	if pin, _ := r.Pin("cc-skills"); pin != LocalPin {
 		t.Fatalf("local source pin = %q, want %q", pin, LocalPin)
+	}
+}
+
+// A --source override pointing at a repo checkout drills through the pack
+// manifest to its guides dir, exactly as a manifest-form github spec does — so a
+// local preview of an unlanded fragment edit resolves every kind, json included.
+func TestResolveLocalDirManifest(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteManifestFixture(t, dir, ".claude/cc-guides.toml")
+	r := newResolver(t, &fixtureFetcher{}, map[string]string{"cc-skills": dir}, nil)
+	body, found, err := r.Resolve(context.Background(), "cc-skills", "settings-base", guide.KindJSON)
+	if err != nil || !found {
+		t.Fatalf("local manifest json resolve: found=%v err=%v", found, err)
+	}
+	if string(body) != "{\n  \"model\": \"opus\"\n}\n" {
+		t.Fatalf("body = %q", body)
+	}
+	if _, found, err := r.Resolve(context.Background(), "cc-skills", "ccx", guide.KindMD); err != nil || !found {
+		t.Fatalf("local manifest md resolve: found=%v err=%v", found, err)
+	}
+	if pin, _ := r.Pin("cc-skills"); pin != LocalPin {
+		t.Fatalf("local source pin = %q, want %q", pin, LocalPin)
+	}
+}
+
+// The root cc-guides.toml serves a local dir too, same precedence as the github path.
+func TestResolveLocalDirManifestRootFallback(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteManifestFixture(t, dir, "cc-guides.toml")
+	r := newResolver(t, &fixtureFetcher{}, map[string]string{"cc-skills": dir}, nil)
+	if _, found, err := r.Resolve(context.Background(), "cc-skills", "settings-base", guide.KindJSON); err != nil || !found {
+		t.Fatalf("root-fallback local resolve: found=%v err=%v", found, err)
+	}
+}
+
+// A manifest that is present but unparseable is fatal, never a silent fallback to
+// reading the dir verbatim — the same refusal the github manifest path makes.
+func TestResolveLocalDirBadManifest(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteFixture(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, "cc-guides.toml"), []byte("name = \"cc-skills\"\nguides = \"plugin/guides\"\nbogus = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := newResolver(t, &fixtureFetcher{}, map[string]string{"cc-skills": dir}, nil)
+	if _, _, err := r.Resolve(context.Background(), "cc-skills", "ccx", guide.KindMD); !errors.Is(err, ErrBadManifest) {
+		t.Fatalf("err = %v, want ErrBadManifest", err)
+	}
+}
+
+// A manifest whose declared guides dir is absent is fatal too — falling back to
+// verbatim would surface a typo'd `guides` path as a bare unknown-fragment error.
+func TestResolveLocalDirManifestGuidesDirMissing(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteFixture(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, "cc-guides.toml"), []byte("name = \"cc-skills\"\nguides = \"plugin/guides\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := newResolver(t, &fixtureFetcher{}, map[string]string{"cc-skills": dir}, nil)
+	if _, _, err := r.Resolve(context.Background(), "cc-skills", "ccx", guide.KindMD); !errors.Is(err, ErrManifestGuides) {
+		t.Fatalf("err = %v, want ErrManifestGuides", err)
 	}
 }
 
@@ -384,13 +453,30 @@ func TestResolveManifestGuidesDirMissing(t *testing.T) {
 
 func mustWriteFixture(t *testing.T, dir string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Join(dir, "md"), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(dir, "sh"), 0o750); err != nil {
-		t.Fatal(err)
+	for _, kind := range []string{"md", "sh", "json"} {
+		if err := os.MkdirAll(filepath.Join(dir, kind), 0o750); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(dir, "md", "ccx.md"), []byte("## Compact Context\nbody\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "json", "settings-base.json"), []byte("{\n  \"model\": \"opus\"\n}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// mustWriteManifestFixture writes a pack checkout: a manifest at manifestRel
+// pointing at a nested guides dir, with the kind subdirs under that dir rather
+// than at the root.
+func mustWriteManifestFixture(t *testing.T, dir, manifestRel string) {
+	t.Helper()
+	man := filepath.Join(dir, filepath.FromSlash(manifestRel))
+	if err := os.MkdirAll(filepath.Dir(man), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(man, []byte("name = \"cc-skills\"\nguides = \"plugin/guides\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFixture(t, filepath.Join(dir, "plugin", "guides"))
 }

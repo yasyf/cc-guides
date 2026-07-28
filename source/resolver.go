@@ -3,6 +3,7 @@ package source
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -175,8 +176,12 @@ func (r *Resolver) source(ctx context.Context, alias string) (*resolved, error) 
 
 	var res *resolved
 	if !strings.HasPrefix(spec, "github:") {
-		// A local directory read in place (dev/E2E override or test fixture).
-		res = &resolved{dir: spec, pin: LocalPin}
+		// A local directory (dev/E2E override or test fixture).
+		dir, err := r.localGuidesDir(spec)
+		if err != nil {
+			return nil, err
+		}
+		res = &resolved{dir: dir, pin: LocalPin}
 	} else {
 		sp, err := ParseSpec(spec)
 		if err != nil {
@@ -191,7 +196,7 @@ func (r *Resolver) source(ctx context.Context, alias string) (*resolved, error) 
 			return nil, err
 		}
 		if sp.Manifest {
-			dir, err = r.manifestGuidesDir(dir, sp)
+			dir, err = r.manifestGuidesDir(dir, sp.Raw)
 			if err != nil {
 				return nil, err
 			}
@@ -205,20 +210,31 @@ func (r *Resolver) source(ctx context.Context, alias string) (*resolved, error) 
 	return res, nil
 }
 
-// manifestGuidesDir resolves a manifest-form spec's extracted full tree to its
-// guides dir: load the repo's cc-guides.toml and point at manifest.Guides, which
-// must exist and be a directory.
-func (r *Resolver) manifestGuidesDir(treeDir string, sp Spec) (string, error) {
+// manifestGuidesDir resolves a tree dir to its guides dir: load the repo's
+// cc-guides.toml and point at manifest.Guides, which must exist and be a
+// directory. label names the source in any error.
+func (r *Resolver) manifestGuidesDir(treeDir, label string) (string, error) {
 	man, err := LoadManifestFrom(treeDir)
 	if err != nil {
-		return "", fmt.Errorf("%w (source %s): %w", ErrBadManifest, sp.Raw, err)
+		return "", fmt.Errorf("%w (source %s): %w", ErrBadManifest, label, err)
 	}
 	guidesDir := filepath.Join(treeDir, filepath.FromSlash(man.Guides))
 	st, err := os.Stat(guidesDir)
 	if err != nil || !st.IsDir() {
-		return "", fmt.Errorf("%w (source %s): manifest guides dir %q is missing", ErrManifestGuides, sp.Raw, man.Guides)
+		return "", fmt.Errorf("%w (source %s): manifest guides dir %q is missing", ErrManifestGuides, label, man.Guides)
 	}
 	return guidesDir, nil
+}
+
+// localGuidesDir resolves a local source dir. A pack checkout drills through its
+// manifest exactly as a manifest-form github spec does, so `--source
+// alias=<checkout>` previews an unlanded fragment edit; a dir carrying no
+// manifest is itself the guides dir.
+func (r *Resolver) localGuidesDir(dir string) (string, error) {
+	if _, err := LoadManifestFrom(dir); errors.Is(err, ErrNoManifest) {
+		return dir, nil
+	}
+	return r.manifestGuidesDir(dir, dir)
 }
 
 // resolveSha picks the sha for an alias: a caller-pinned sha (check mode) or a

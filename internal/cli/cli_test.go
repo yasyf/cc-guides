@@ -44,6 +44,19 @@ func guidesFixture(t *testing.T) string {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "md", "ccx.md"), "## Compact Context\nccx body\n")
 	write(t, filepath.Join(dir, "sh", "install.sh"), "#!/bin/sh\nNAME=\"{{binary}}\"\necho \"$NAME\"\n")
+	write(t, filepath.Join(dir, "json", "settings-base.json"), "{\n  \"model\": \"opus\"\n}\n")
+	return dir
+}
+
+// packFixture writes a pack checkout the way a real source repo is laid out: a
+// cc-guides.toml at the root pointing at a nested guides dir.
+func packFixture(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, ".claude", "cc-guides.toml"), "name = \"cc-skills\"\nguides = \"plugin/guides\"\n")
+	guides := filepath.Join(dir, "plugin", "guides")
+	write(t, filepath.Join(guides, "md", "ccx.md"), "## Compact Context\nccx body\n")
+	write(t, filepath.Join(guides, "json", "settings-base.json"), "{\n  \"model\": \"opus\"\n}\n")
 	return dir
 }
 
@@ -527,6 +540,41 @@ func TestRenderCheckJSON(t *testing.T) {
 	write(t, ".claude/settings.json", "{\n  \"model\": \"different\"\n}\n")
 	if code, out, _ := exec("check"); code != 1 || out != "STALE\t.claude/settings.json\n" {
 		t.Fatalf("json tamper: code=%d out=%q", code, out)
+	}
+}
+
+// A json artifact importing a json fragment from a local source: the flattened
+// fixture is the guides dir itself, while the pack fixture is a repo checkout the
+// override must drill through its manifest to reach.
+func TestRenderJSONImportFromLocalSource(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		fixture func(*testing.T) string
+	}{
+		{"flattened", guidesFixture},
+		{"pack checkout", packFixture},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo(t)
+			fixture := tc.fixture(t)
+			write(t, ".claude/fragments/.claude/settings.json/layout.toml", "fragments = [\n  \"cc-skills:settings-base\",\n  \"overrides\",\n]\n"+ccSkillsSource)
+			write(t, ".claude/fragments/.claude/settings.json/overrides.fragment.json", "{\n  \"env\": {\n    \"X\": \"1\"\n  }\n}\n")
+
+			if code, _, errout := exec("render", "--source", srcFlag(fixture)); code != 0 {
+				t.Fatalf("render exit=%d: %s", code, errout)
+			}
+			disk, err := os.ReadFile(".claude/settings.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "{\n  \"model\": \"opus\",\n  \"env\": {\n    \"X\": \"1\"\n  }\n}\n"
+			if string(disk) != want {
+				t.Fatalf("merged json:\n%s\nwant:\n%s", disk, want)
+			}
+			if code, out, errout := exec("check", "--source", srcFlag(fixture)); code != 0 || out != "OK\t.claude/settings.json\n" {
+				t.Fatalf("check: code=%d out=%q err=%s", code, out, errout)
+			}
+		})
 	}
 }
 
