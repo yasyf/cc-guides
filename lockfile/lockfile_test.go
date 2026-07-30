@@ -38,6 +38,71 @@ func TestLockRoundTrip(t *testing.T) {
 	}
 }
 
+// TOML allows a quoted table-header key, so a hand-edited or badly merged lock can
+// carry an alias holding anything — a raw newline included. Parse once accepted that
+// and Encode re-emitted it raw into `[sources.<alias>]`, writing a lock nothing could
+// load: the same corruption class as a control character in a target, at an injection
+// point the target guard never covered. A render cannot originate one (layout.Parse
+// and --source both gate on ValidName), so an alias reaching here means the lock is
+// already corrupt, and accepting it would let the next scoped render copy it through
+// Merge and rewrite the lock unparseable.
+func TestParseRejectsInvalidSourceAlias(t *testing.T) {
+	tests := []struct {
+		name  string
+		alias string // as written inside a TOML quoted key
+	}{
+		{"newline escape", `evil\nalias`},
+		{"carriage return escape", `evil\ralias`},
+		{"embedded quote", `ev\"il`},
+		{"closing bracket", `a]x`},
+		{"uppercase", `CcSkills`},
+		{"dot", `cc.skills`},
+		{"empty", ``},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := "schema = 1\nversion = \"1.0.0\"\nartifacts = []\n\n" +
+				"[sources.\"" + tt.alias + "\"]\n" +
+				"spec = \"github:acme/x\"\n" +
+				"commit = \"" + strings.Repeat("0", 40) + "\"\n"
+			_, err := lockfile.Parse([]byte(raw))
+			if err == nil {
+				t.Fatalf("Parse accepted alias %q", tt.alias)
+			}
+			if !strings.Contains(err.Error(), "source alias") {
+				t.Fatalf("alias %q must be refused as an alias, got: %v", tt.alias, err)
+			}
+		})
+	}
+}
+
+// Encode crashes on an invalid alias rather than writing a header nothing can parse.
+// A table header cannot go through quote without rewriting every committed lock, and
+// Parse refuses to produce such a Lock, so reaching this means one was built by hand.
+func TestEncodePanicsOnInvalidAlias(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Encode must panic on an alias it cannot write safely")
+		}
+	}()
+	lk := &lockfile.Lock{
+		Schema: 1, Version: "1.0.0",
+		Sources: map[string]lockfile.SourcePin{"evil\nalias": {Spec: "github:acme/x", Commit: "local"}},
+	}
+	_ = lk.Encode()
+}
+
+// The fleet's committed locks must not churn: a valid alias still writes a bare,
+// unquoted table header, byte for byte as before.
+func TestEncodeKeepsAliasHeaderBare(t *testing.T) {
+	got := string(sampleLock().Encode())
+	for _, want := range []string{"\n[sources.cc-skills]\n", "\n[sources.team]\n"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("alias header must stay bare and unquoted, missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestLockEncodeDeterministic(t *testing.T) {
 	a := string(sampleLock().Encode())
 	b := string(sampleLock().Encode())

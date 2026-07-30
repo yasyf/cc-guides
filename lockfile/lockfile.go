@@ -14,6 +14,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/yasyf/cc-guides/guide"
 	"github.com/yasyf/cc-guides/internal/tomlstr"
 )
 
@@ -62,6 +63,14 @@ func Parse(data []byte) (*Lock, error) {
 	}
 	lk := &Lock{Schema: raw.Schema, Version: raw.Version, Artifacts: raw.Artifacts, Sources: map[string]SourcePin{}}
 	for alias, sp := range raw.Sources {
+		// TOML allows a quoted table-header key, so a hand-edited or badly merged lock
+		// can carry an alias holding anything at all — a newline included. A render can
+		// never produce one (layout.Parse and --source both gate on ValidName), so an
+		// alias failing here means the lock is corrupt, and loading it would let the
+		// next scoped render copy it through Merge into a lock nothing can read.
+		if !guide.ValidName(alias) {
+			return nil, fmt.Errorf("cc-guides.lock: source alias %q is invalid — the lock is hand-edited or corrupt; re-render to rebuild it", alias)
+		}
 		if !validCommit(sp.Commit) {
 			return nil, fmt.Errorf("cc-guides.lock: [sources.%s] commit %q must be a 40-char sha or \"local\"", alias, sp.Commit)
 		}
@@ -101,6 +110,13 @@ func (l *Lock) HasArtifact(target string) bool {
 // Encode renders the lock to canonical, deterministic bytes: sorted artifacts,
 // alias-sorted source tables, stable field order, a leading do-not-edit comment,
 // and a single trailing newline.
+//
+// It panics on an alias that is not a valid name. Every value goes through quote,
+// but a table header cannot: quoting one unconditionally would rewrite the
+// `[sources.<alias>]` line of every lock in the fleet, and quoting it only when
+// needed would exist solely to serialize an alias Parse now refuses to load. With
+// both parsers gating on ValidName, an invalid alias here is a Lock built by hand in
+// Go — an impossible state, which this package crashes on rather than papers over.
 func (l *Lock) Encode() []byte {
 	var b strings.Builder
 	b.WriteString(header)
@@ -124,6 +140,9 @@ func (l *Lock) Encode() []byte {
 	}
 	sort.Strings(aliases)
 	for _, a := range aliases {
+		if !guide.ValidName(a) {
+			panic(fmt.Sprintf("lockfile: source alias %q is invalid; Parse rejects these, so this Lock was constructed by hand", a))
+		}
 		sp := l.Sources[a]
 		b.WriteString("\n[sources." + a + "]\n")
 		b.WriteString("spec = " + quote(sp.Spec) + "\n")
