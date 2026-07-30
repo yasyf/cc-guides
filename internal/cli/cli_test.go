@@ -3,12 +3,16 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/BurntSushi/toml"
+
+	"github.com/yasyf/cc-guides/guide"
 	"github.com/yasyf/cc-guides/internal/cli"
 	"github.com/yasyf/cc-guides/lockfile"
 )
@@ -910,8 +914,9 @@ func TestScopedRenderSkipsDropGuard(t *testing.T) {
 // A `target` carrying a raw newline once rendered at exit 0 and wrote a lock with a
 // newline inside a TOML basic string, after which every render and check died with
 // "strings cannot contain newlines" until someone repaired the lock by hand. The
-// render must refuse, and — belt and braces at the serialization boundary — a lock
-// written from such a value must still parse.
+// render must refuse it, and the two layers below the render must hold on their own:
+// the serializer emits valid TOML for any value, and the lock parser refuses this one
+// as a path.
 func TestTargetWithControlCharRefusedAndLockStaysParseable(t *testing.T) {
 	repo(t)
 	target := "ok.md\n[sources.evil]\nspec = \"pwned\"\nnote.md"
@@ -926,15 +931,18 @@ func TestTargetWithControlCharRefusedAndLockStaysParseable(t *testing.T) {
 		t.Fatal("a refused render must write no lock")
 	}
 
-	// The serializer must be safe on its own, so a value reaching it by any other
-	// route still writes a lock that reads back.
+	// Two layers, asserted separately because they guarantee different things. The
+	// serializer must emit valid TOML whatever it is handed, so a hostile value
+	// reaching it by any other route cannot write a file the decoder chokes on.
 	enc := (&lockfile.Lock{Schema: 1, Version: "1.2.3", Artifacts: []string{target}}).Encode()
-	back, err := lockfile.Parse(enc)
-	if err != nil {
-		t.Fatalf("a lock holding %q must parse back, got %v:\n%s", target, err, enc)
+	var decoded map[string]any
+	if _, err := toml.Decode(string(enc), &decoded); err != nil {
+		t.Fatalf("Encode must emit parseable TOML for %q, got %v:\n%s", target, err, enc)
 	}
-	if len(back.Artifacts) != 1 || back.Artifacts[0] != target {
-		t.Fatalf("round-trip lost the artifact: %#v", back.Artifacts)
+	// lockfile.Parse then refuses it on top of that, on path-safety grounds rather
+	// than syntax — an artifact is a path, and no legitimate one looks like this.
+	if _, err := lockfile.Parse(enc); !errors.Is(err, guide.ErrUnsafePathChar) {
+		t.Fatalf("Parse must refuse the artifact as an unsafe path, got %v", err)
 	}
 }
 

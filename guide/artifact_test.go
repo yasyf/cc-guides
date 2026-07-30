@@ -95,8 +95,8 @@ func TestTargetDirectoryFormsHitTheEscapeGuard(t *testing.T) {
 func TestTargetCharsetSentinel(t *testing.T) {
 	for _, override := range []string{"a\nb.md", "a\x1fb.md", `a\b.md`} {
 		_, _, err := guide.TargetForLayoutDir(".claude/fragments/gitignore", override)
-		if !errors.Is(err, guide.ErrUnsafeTargetChar) {
-			t.Fatalf("override %q error = %v, want ErrUnsafeTargetChar", override, err)
+		if !errors.Is(err, guide.ErrUnsafePathChar) {
+			t.Fatalf("override %q error = %v, want ErrUnsafePathChar", override, err)
 		}
 	}
 }

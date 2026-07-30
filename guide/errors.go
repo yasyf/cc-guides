@@ -32,10 +32,14 @@ var (
 	// ErrUnknownExt is an unsupported artifact/fragment extension.
 	ErrUnknownExt = errors.New("unsupported extension")
 
-	// ErrUnsafeTargetChar is a `target` override holding a character an artifact path
-	// may not carry — a control character (which would write an unparseable lock) or
-	// a backslash.
-	ErrUnsafeTargetChar = errors.New("unsafe character in target")
+	// ErrUnsafePathChar is a repo path holding a character a real filename may not
+	// carry — a control character (which would write an unparseable lock) or a
+	// backslash.
+	ErrUnsafePathChar = errors.New("unsafe character in path")
+
+	// ErrUnsafePath is a repo path that escapes the repo, is absolute, or names a
+	// directory where an artifact was required.
+	ErrUnsafePath = errors.New("unsafe path")
 
 	// ErrHandwrittenOverwrite is a render refusing to clobber a handwritten file
 	// cc-guides does not manage (no marker, not in the lock).

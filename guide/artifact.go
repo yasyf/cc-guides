@@ -32,11 +32,8 @@ func TargetForLayoutDir(dir, override string) (target string, kind Kind, err err
 	if override != "" {
 		rel = override
 	}
-	if err := targetCharset(rel); err != nil {
+	if err := ValidateArtifactPath(rel); err != nil {
 		return "", 0, fmt.Errorf("layout dir %q has an unsafe target %q: %w", dir, rel, err)
-	}
-	if unsafeTarget(rel) {
-		return "", 0, fmt.Errorf("layout dir %q has an unsafe target %q", dir, rel)
 	}
 	kind, err = KindForPath(rel)
 	if err != nil {
@@ -48,38 +45,51 @@ func TargetForLayoutDir(dir, override string) (target string, kind Kind, err err
 	return rel, kind, nil
 }
 
-// unsafeTarget reports whether rel names anything but a file inside the repo. The
-// Clean comparison catches every traversal Clean can normalize away, leaving the
-// forms that survive it — an absolute path, a leading "..", and the bare "." and
-// ".." — to be rejected by name. Those last two would otherwise reach the extension
-// check and be turned back by an accident of filepath.Ext rather than by a guard.
-func unsafeTarget(rel string) bool {
-	return rel != path.Clean(rel) ||
-		path.IsAbs(rel) ||
-		rel == "." || rel == ".." ||
-		strings.HasPrefix(rel, "../")
-}
-
-// targetCharset rejects two characters that have no place in a real filename: a C0
-// control or DEL, and a backslash, which is not a separator on any platform cc-guides
-// ships for and so marks a Windows path someone wrote by mistake. It refuses them
-// here, where the diagnostic can name the layout dir, rather than letting them fail
-// somewhere downstream.
+// ValidateRepoPath reports why p cannot be a repo-relative path that stays inside the
+// repo, or nil. It is the one path-safety rule in this module, shared by every place a
+// path arrives from outside: a layout's `target` key, an artifact the lock records,
+// and a manifest's `guides` dir. p may name a directory — "." passes — so a caller
+// needing a file uses ValidateArtifactPath instead.
 //
-// This is deliberately not a completeness check, and nothing should be built on it as
-// one. A bare double quote, a C1 control, and a bidi override all pass and reach the
-// lock; what keeps the lock parseable is tomlstr.Quote, which escapes every value
-// unconditionally and is verified over every rune. Widening this guard to cover those
-// would duplicate a guarantee the serializer already makes, leaving two things to keep
-// in sync instead of one.
-func targetCharset(rel string) error {
-	for _, r := range rel {
+// The Clean comparison catches every traversal Clean can normalize away, leaving the
+// forms that survive it — an absolute path and a leading ".." — to be rejected by
+// name.
+//
+// The character rule is deliberately not a completeness check, and nothing should be
+// built on it as one. A bare double quote, a C1 control, and a bidi override all pass
+// and reach the lock; what keeps the lock parseable is tomlstr.Quote, which escapes
+// every value unconditionally and is verified over every rune. What this rejects is
+// what has no place in a real filename: a C0 control or DEL, and a backslash, which is
+// not a separator on any platform cc-guides ships for and so marks a Windows path
+// someone wrote by mistake.
+func ValidateRepoPath(p string) error {
+	for _, r := range p {
 		if r < 0x20 || r == 0x7f {
-			return fmt.Errorf("%w: control character %q", ErrUnsafeTargetChar, r)
+			return fmt.Errorf("%w: control character %q", ErrUnsafePathChar, r)
 		}
 		if r == '\\' {
-			return fmt.Errorf("%w: backslash (targets are slash-separated)", ErrUnsafeTargetChar)
+			return fmt.Errorf("%w: backslash (paths are slash-separated)", ErrUnsafePathChar)
 		}
+	}
+	if p == "" {
+		return fmt.Errorf("%w: empty path", ErrUnsafePath)
+	}
+	if p != path.Clean(p) || path.IsAbs(p) || p == ".." || strings.HasPrefix(p, "../") {
+		return fmt.Errorf("%w: %q is not a clean path inside the repo", ErrUnsafePath, p)
+	}
+	return nil
+}
+
+// ValidateArtifactPath reports why p cannot be a rendered artifact's path, or nil: the
+// shared repo-path rule, plus naming a file rather than a directory. A bare "." would
+// otherwise reach the extension check and be turned back by an accident of
+// filepath.Ext rather than by a guard.
+func ValidateArtifactPath(p string) error {
+	if err := ValidateRepoPath(p); err != nil {
+		return err
+	}
+	if p == "." {
+		return fmt.Errorf("%w: %q names a directory, not an artifact", ErrUnsafePath, p)
 	}
 	return nil
 }

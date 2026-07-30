@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -57,8 +56,10 @@ func ParseManifest(data []byte) (*Manifest, error) {
 	if g == "" {
 		return nil, fmt.Errorf("%w: `guides` is required", ErrBadManifest)
 	}
-	if path.IsAbs(g) || g != path.Clean(g) || g == ".." || strings.HasPrefix(g, "../") || strings.Contains(g, "/../") {
-		return nil, fmt.Errorf("%w: `guides` %q must be a clean relative path with no `..`", ErrBadManifest, g)
+	// The same path-safety rule the lock and a layout's target use. `guides` names a
+	// directory, so "." is legitimate here and ValidateArtifactPath would be wrong.
+	if err := guide.ValidateRepoPath(g); err != nil {
+		return nil, fmt.Errorf("%w: `guides` %q must be a clean relative path with no `..`: %w", ErrBadManifest, g, err)
 	}
 	return &Manifest{Name: raw.Name, Description: raw.Description, Guides: g}, nil
 }

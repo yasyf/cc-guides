@@ -1,11 +1,13 @@
 package lockfile_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/yasyf/cc-guides/guide"
 	"github.com/yasyf/cc-guides/lockfile"
 )
 
@@ -73,6 +75,63 @@ func TestParseRejectsInvalidSourceAlias(t *testing.T) {
 				t.Fatalf("alias %q must be refused as an alias, got: %v", tt.alias, err)
 			}
 		})
+	}
+}
+
+// Artifacts arrived unvalidated: every entry that gets WRITTEN passed
+// TargetForLayoutDir, but an entry read back from an editable lock is untrusted, and
+// render stats each one it is about to stop managing. A crafted entry therefore
+// reached os.Stat and resolved past the repo root — an existence probe on an
+// arbitrary absolute path. Validation belongs here, at the one parse boundary, so no
+// consumer needs its own check.
+func TestParseRejectsUnsafeArtifact(t *testing.T) {
+	tests := []struct {
+		name     string
+		artifact string // as written inside a TOML basic string
+		want     error
+	}{
+		{"traversal to an absolute file", `../../../../../../../../../../etc/passwd`, guide.ErrUnsafePath},
+		{"single traversal", `../outside.md`, guide.ErrUnsafePath},
+		{"absolute", `/etc/passwd`, guide.ErrUnsafePath},
+		{"unclean", `a/../../b.md`, guide.ErrUnsafePath},
+		{"bare dot", `.`, guide.ErrUnsafePath},
+		{"bare dotdot", `..`, guide.ErrUnsafePath},
+		{"empty", ``, guide.ErrUnsafePath},
+		// Escapes, so TOML itself accepts the document and this validator is what
+		// rejects the decoded value. A raw control byte would be refused by the decoder
+		// instead, proving nothing about this validation.
+		{"newline", `ok.md\nevil`, guide.ErrUnsafePathChar},
+		{"bell", `a\u0007b.md`, guide.ErrUnsafePathChar},
+		{"tab", `a\tb.md`, guide.ErrUnsafePathChar},
+		{"backslash", `..\\etc\\passwd.md`, guide.ErrUnsafePathChar},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := "schema = 1\nversion = \"1.0.0\"\nartifacts = [\"" + tt.artifact + "\"]\n"
+			_, err := lockfile.Parse([]byte(raw))
+			if err == nil {
+				t.Fatalf("Parse accepted artifact %q", tt.artifact)
+			}
+			// The sentinel, not a substring: BurntSushi's own errors name the "artifacts"
+			// key, so a substring check would pass on a decoder rejection and prove
+			// nothing about this validation.
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("artifact %q error = %v, want %v", tt.artifact, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseAcceptsRealArtifacts(t *testing.T) {
+	for _, a := range []string{
+		"AGENTS.md", ".gitignore", ".mcp.json", "docs/.gitignore",
+		".github/workflows/docs.yml", "plugin/scripts/install-binary.sh",
+		".claude/settings.json", ".pre-commit-config.yaml",
+	} {
+		raw := "schema = 1\nversion = \"1.0.0\"\nartifacts = [\"" + a + "\"]\n"
+		if _, err := lockfile.Parse([]byte(raw)); err != nil {
+			t.Fatalf("Parse rejected the legitimate artifact %q: %v", a, err)
+		}
 	}
 }
 

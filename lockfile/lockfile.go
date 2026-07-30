@@ -61,6 +61,15 @@ func Parse(data []byte) (*Lock, error) {
 	if _, err := toml.Decode(string(data), &raw); err != nil {
 		return nil, fmt.Errorf("cc-guides.lock: %w", err)
 	}
+	// Every artifact that gets written passed TargetForLayoutDir first, but a lock is
+	// an editable file: an entry read back is untrusted input, and render stats each
+	// one it is about to stop managing, so an unvalidated entry reaches the filesystem
+	// as a path. Validate at this boundary so no consumer needs its own check.
+	for _, a := range raw.Artifacts {
+		if err := guide.ValidateArtifactPath(a); err != nil {
+			return nil, fmt.Errorf("cc-guides.lock: artifact %q is invalid (%w) — the lock is hand-edited or corrupt; re-render to rebuild it", a, err)
+		}
+	}
 	lk := &Lock{Schema: raw.Schema, Version: raw.Version, Artifacts: raw.Artifacts, Sources: map[string]SourcePin{}}
 	for alias, sp := range raw.Sources {
 		// TOML allows a quoted table-header key, so a hand-edited or badly merged lock
