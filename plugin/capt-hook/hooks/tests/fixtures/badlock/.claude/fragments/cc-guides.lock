@@ -1,0 +1,3 @@
+# Deliberately undecodable: a latin-1 byte where UTF-8 is declared.
+schema = 1
+artifacts = ["AGENTS.md", "café.md"]

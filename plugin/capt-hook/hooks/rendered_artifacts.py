@@ -38,17 +38,35 @@ def lock_root(start: Path) -> Path | None:
     return None
 
 
+def repo_relative(entry: str) -> bool:
+    """Report whether a lock ``artifacts`` entry names a path inside the repo, safe to build on.
+
+    The lock is untrusted input: a corrupt or hand-crafted one can carry an absolute path, a ``..``
+    escape, or a control character, and every entry it lists reaches ``Path`` operations that stat
+    the filesystem. An embedded NUL makes both ``samefile`` and ``resolve`` raise ``ValueError`` —
+    which is not an ``OSError``, so the match loop does not catch it and ``dispatch.run_handler``
+    would convert it into a wrong-allow. Rejecting at the parse boundary is therefore what keeps a
+    corrupt lock from turning this guard's block into an allow, and it drops the escaping and
+    absolute entries in the same pass: an entry that cannot name a repo artifact is simply not one.
+    """
+    return bool(entry) and entry.isprintable() and not (path := Path(entry)).is_absolute() and ".." not in path.parts
+
+
 def lock_artifacts(root: Path) -> tuple[str, ...]:
-    """The ``artifacts`` the lock at *root* lists — () for a missing, malformed, or mis-shaped lock."""
+    """The ``artifacts`` the lock at *root* lists — () for a missing, malformed, or mis-shaped lock.
+
+    An entry that is not a repo-relative path is dropped rather than raised on, so one corrupt
+    entry costs its own match and leaves the rest of the lock enforcing.
+    """
     lock = root / ".claude" / "fragments" / "cc-guides.lock"
     try:
         data = tomllib.loads(lock.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, ValueError):
         return ()
     artifacts = data.get("artifacts")
     if not isinstance(artifacts, list):
         return ()
-    return tuple(entry for entry in artifacts if isinstance(entry, str))
+    return tuple(entry for entry in artifacts if isinstance(entry, str) and repo_relative(entry))
 
 
 def layout_target(layout_dir: Path, fragments: Path) -> str:
@@ -57,11 +75,13 @@ def layout_target(layout_dir: Path, fragments: Path) -> str:
     The optional ``target`` key is what lets a dir named ``gitignore/`` render ``.gitignore``; a
     layout that declares none renders the artifact its own path mirrors. A ``layout.toml`` that
     will not parse declares no target either, so its dir keeps the mirrored one — a broken layout
-    costs the block message precision, never the block.
+    costs the block message precision, never the block. ``ValueError`` is the catch rather than
+    ``TOMLDecodeError`` because it covers both ways the read fails: undecodable bytes raise
+    ``UnicodeDecodeError``, unparseable TOML raises ``TOMLDecodeError``, and both subclass it.
     """
     try:
         target = tomllib.loads((layout_dir / "layout.toml").read_text(encoding="utf-8")).get("target")
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, ValueError):
         target = None
     return target if isinstance(target, str) else str(layout_dir.relative_to(fragments))
 
@@ -196,7 +216,20 @@ class RenderedArtifact(CustomCondition):
             pattern=r"\.coveragerc is cc-guides-rendered — 2 fragment dirs declare it as their `target` "
             r"\(\.claude/fragments/coverage-a/, \.claude/fragments/coverage-b/\) — fix that duplicate, then edit the right one"
         ),
-        # allows: unlisted file, render source, no lock, mis-shaped lock
+        # denies: a corrupt lock's unusable entries are skipped, leaving its clean entries enforcing
+        Input(
+            tool="Edit",
+            cwd=str(Path(__file__).parent / "tests/fixtures/hostile"),
+            file=str(Path(__file__).parent / "tests/fixtures/hostile/AGENTS.md"),
+            content="hand edit",
+        ): Block(pattern=r"^AGENTS\.md is cc-guides-rendered — edit the fragments under \.claude/fragments/AGENTS\.md/"),
+        Input(
+            tool="Edit",
+            cwd=str(Path(__file__).parent / "tests/fixtures/hostile"),
+            file=str(Path(__file__).parent / "tests/fixtures/hostile/CLAUDE.md"),
+            content="hand edit",
+        ): Block(pattern=r"^CLAUDE\.md is cc-guides-rendered — edit the fragments under \.claude/fragments/CLAUDE\.md/"),
+        # allows: unlisted file, render source, no lock, mis-shaped lock, undecodable lock
         Input(
             tool="Edit",
             cwd=str(Path(__file__).parent / "tests/fixtures/managed"),
@@ -219,6 +252,12 @@ class RenderedArtifact(CustomCondition):
             tool="Edit",
             cwd=str(Path(__file__).parent / "tests/fixtures/malformed"),
             file=str(Path(__file__).parent / "tests/fixtures/malformed/AGENTS.md"),
+            content="x",
+        ): Allow(),
+        Input(
+            tool="Edit",
+            cwd=str(Path(__file__).parent / "tests/fixtures/badlock"),
+            file=str(Path(__file__).parent / "tests/fixtures/badlock/AGENTS.md"),
             content="x",
         ): Allow(),
     },

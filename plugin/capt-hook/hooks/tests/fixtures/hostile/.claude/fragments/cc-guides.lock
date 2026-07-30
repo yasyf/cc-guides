@@ -1,0 +1,5 @@
+# A deliberately corrupt lock: a `..` escape, an absolute path, and an embedded NUL, each
+# listed ahead of the clean entry it would otherwise shadow or crash before reaching.
+schema = 1
+version = "0.0.0"
+artifacts = ["../hostile/AGENTS.md", "/AGENTS.md", "CLAUDE\u0000.md", "AGENTS.md", "CLAUDE.md"]
