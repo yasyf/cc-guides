@@ -22,6 +22,7 @@ type renderOpts struct {
 	stdout  bool
 	dryRun  bool
 	force   bool
+	prune   bool
 	sources []string
 }
 
@@ -43,6 +44,7 @@ func newRenderCmd(ctx context.Context) *cobra.Command {
 	f.BoolVar(&o.stdout, "stdout", false, "write rendered output to stdout instead of files")
 	f.BoolVar(&o.dryRun, "dry-run", false, "report what would be written without writing")
 	f.BoolVar(&o.force, "force", false, "overwrite an artifact even if cc-guides does not manage it")
+	f.BoolVar(&o.prune, "prune", false, "stop managing a locked artifact whose dir is gone, leaving its file on disk")
 	f.StringArrayVar(&o.sources, "source", nil, "override a source alias: --source alias=<github:spec|localdir> (repeatable)")
 	return cmd
 }
@@ -66,13 +68,14 @@ func runRender(ctx context.Context, cmd *cobra.Command, args []string, o renderO
 	}
 	// Preflight the whole batch: an unsafe target (escaping the repo, or shared by
 	// two dirs) must not clobber anything mid-run.
-	if err := preflightTargets(dirs); err != nil {
+	ads, err := preflightTargets(root, dirs)
+	if err != nil {
 		return exit(2, err)
 	}
 	// A render with path arguments is scoped (surgical lock merge, shared pins
 	// frozen); a no-argument render is a full, authoritative rebuild.
 	scoped := len(args) > 0
-	return renderV3(ctx, cmd, root, dirs, overrides, ver, o, scoped)
+	return renderV3(ctx, cmd, root, ads, overrides, ver, o, scoped)
 }
 
 // renderV3 composes and writes every v3 artifact dir, resolving imports through a
@@ -85,23 +88,17 @@ func runRender(ctx context.Context, cmd *cobra.Command, args []string, o renderO
 // instead of refusing a half-written file). A full render (scoped false) rebuilds
 // the lock from this run alone; a scoped render pins aliases already in the lock and
 // merges into it.
-func renderV3(ctx context.Context, cmd *cobra.Command, root string, dirs []string, overrides map[string]string, ver string, o renderOpts, scoped bool) error {
-	if len(dirs) == 0 {
+func renderV3(ctx context.Context, cmd *cobra.Command, root string, ads []*artifactDir, overrides map[string]string, ver string, o renderOpts, scoped bool) error {
+	if len(ads) == 0 {
 		return nil
 	}
 	existingLock, _, err := lockfile.Load(root)
 	if err != nil {
 		return exit(2, err)
 	}
-	ads := make([]*artifactDir, 0, len(dirs))
 	layouts := map[string]*layout.Layout{}
-	for _, dir := range dirs {
-		ad, err := loadArtifactDir(root, dir)
-		if err != nil {
-			return exit(2, err)
-		}
-		ads = append(ads, ad)
-		layouts[dir] = ad.lay
+	for _, ad := range ads {
+		layouts[ad.dir] = ad.lay
 	}
 	specs, err := unionSpecs(layouts, overrides)
 	if err != nil {
@@ -145,6 +142,16 @@ func renderV3(ctx context.Context, cmd *cobra.Command, root string, dirs []strin
 		rendered = append(rendered, ad.target)
 		for _, a := range ad.lay.UsedAliases() {
 			usedAliases[a] = true
+		}
+	}
+
+	// A full render rebuilds the lock, so a target that leaves this batch stops being
+	// managed. Refuse that while its file is still on disk — the shape of a renamed
+	// artifact dir whose `target` key was never added. Checked before --stdout and
+	// --dry-run report success, so a dry run surfaces the hazard too.
+	if !scoped {
+		if err := droppedTargets(root, existingLock, rendered, o.prune); err != nil {
+			return exit(2, err)
 		}
 	}
 
@@ -296,32 +303,111 @@ func writeArtifact(cmd *cobra.Command, root, target, srcLabel string, kind guide
 	return nil
 }
 
-// preflightTargets validates the whole batch's targets before any write, folding
-// one deterministic error over every unsafe target: one that escapes the repo via
-// "..", or one shared by two artifact dirs.
-func preflightTargets(dirs []string) error {
-	targets := map[string]string{}    // dir -> cleaned target
-	byTarget := map[string][]string{} // cleaned target -> dirs
+// preflightTargets loads the whole batch and validates its targets before any write.
+// A render is atomic — a partial tree is a corrupted one — so the first dir that
+// fails to load refuses the whole batch; check loads on its own terms and shares
+// only the target gate. It returns the loaded dirs so the render composes from the
+// same parse.
+func preflightTargets(root string, dirs []string) ([]*artifactDir, error) {
+	ads := make([]*artifactDir, 0, len(dirs))
 	for _, dir := range dirs {
-		target, _, err := guide.TargetForLayoutDir(dir)
+		ad, err := loadArtifactDir(root, dir)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		ct := path.Clean(filepath.ToSlash(target))
-		targets[dir] = ct
-		byTarget[ct] = append(byTarget[ct], dir)
+		ads = append(ads, ad)
+	}
+	if err := conflictingTargets(ads); err != nil {
+		return nil, err
+	}
+	return ads, nil
+}
+
+// sharedBy names the dirs of one collision, sorted. Dirs whose targets differ only
+// by case carry their target too, since naming the dirs alone would read as a claim
+// that two identical strings collided.
+func sharedBy(sharing []*artifactDir) []string {
+	distinct := map[string]bool{}
+	for _, ad := range sharing {
+		distinct[ad.target] = true
+	}
+	entries := make([]string, 0, len(sharing))
+	for _, ad := range sharing {
+		if len(distinct) > 1 {
+			entries = append(entries, fmt.Sprintf("%s (%s)", ad.target, ad.dir))
+			continue
+		}
+		entries = append(entries, ad.dir)
+	}
+	sort.Strings(entries)
+	return entries
+}
+
+// droppedTargets refuses a full render that would silently stop managing an
+// artifact: one the existing lock records, that this run no longer renders, whose
+// file is still on disk. Renaming an artifact dir without adding the matching
+// `target` key produces exactly that — the old artifact is orphaned and the rebuilt
+// lock forgets it, which for a markerless kind (json) no later check can detect,
+// since lock membership was its only record of being managed. Dropping an artifact
+// deliberately stays possible: delete its file along with its dir, or pass --prune
+// to leave the file on disk unmanaged.
+func droppedTargets(root string, existing *lockfile.Lock, rendered []string, prune bool) error {
+	if existing == nil || prune {
+		return nil
+	}
+	kept := make(map[string]bool, len(rendered))
+	for _, target := range rendered {
+		kept[target] = true
+	}
+	var dropped []string
+	for _, target := range existing.Artifacts {
+		if kept[target] {
+			continue
+		}
+		_, err := os.Stat(filepath.Join(root, filepath.FromSlash(target)))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("checking %s before dropping it from the lock: %w", target, err)
+		}
+		dropped = append(dropped, target)
+	}
+	if len(dropped) == 0 {
+		return nil
+	}
+	sort.Strings(dropped)
+	return fmt.Errorf("%w: %s (did an artifact dir get renamed without a `target` key? delete the file along with its dir, or pass --prune to leave it unmanaged)",
+		guide.ErrDroppedArtifact, strings.Join(dropped, ", "))
+}
+
+// conflictingTargets folds one deterministic error over every unsafe target in a
+// loaded batch: one that escapes the repo via "..", or one shared by two artifact
+// dirs. Each dir's effective target comes from its parsed layout, so a `target`
+// override colliding with another dir's path-derived target is caught here too.
+//
+// Sharing is judged case-insensitively, because the fleet authors on a
+// case-insensitive filesystem and renders on a case-sensitive one: `.gitignore` and
+// `.GITIGNORE` are two artifacts in CI and one file on the laptop that would silently
+// clobber. Refusing both places keeps a repo's render portable.
+func conflictingTargets(ads []*artifactDir) error {
+	byTarget := map[string][]*artifactDir{} // case-folded target -> the dirs claiming it
+	for _, ad := range ads {
+		fold := strings.ToLower(ad.target)
+		byTarget[fold] = append(byTarget[fold], ad)
 	}
 
 	var msgs []string
-	for dir, ct := range targets {
-		switch {
-		case ct == ".." || strings.HasPrefix(ct, "../") || path.IsAbs(ct):
-			msgs = append(msgs, fmt.Sprintf("%q: target %q escapes the repo root", dir, ct))
-		case len(byTarget[ct]) > 1:
-			others := append([]string(nil), byTarget[ct]...)
-			sort.Strings(others)
-			msgs = append(msgs, fmt.Sprintf("target %q is shared by %s", ct, strings.Join(others, ", ")))
+	for _, ad := range ads {
+		if ad.target == ".." || strings.HasPrefix(ad.target, "../") || path.IsAbs(ad.target) {
+			msgs = append(msgs, fmt.Sprintf("%q: target %q escapes the repo root", ad.dir, ad.target))
 		}
+	}
+	for _, sharing := range byTarget {
+		if len(sharing) < 2 {
+			continue
+		}
+		msgs = append(msgs, fmt.Sprintf("target %q is shared by %s", sharing[0].target, strings.Join(sharedBy(sharing), ", ")))
 	}
 	if len(msgs) == 0 {
 		return nil

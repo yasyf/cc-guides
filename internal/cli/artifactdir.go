@@ -23,15 +23,11 @@ type artifactDir struct {
 	lay    *layout.Layout
 }
 
-// loadArtifactDir resolves and validates one artifact dir: the target path guards
-// (TargetForLayoutDir), a parsed layout.toml, and the dir-contents guards
-// (flat dir, no stray files, every *.fragment.* referenced and every referenced
-// local fragment present).
+// loadArtifactDir resolves and validates one artifact dir: a parsed layout.toml,
+// the target path guards (TargetForLayoutDir, honoring the layout's optional
+// `target` override), and the dir-contents guards (flat dir, no stray files, every
+// *.fragment.* referenced and every referenced local fragment present).
 func loadArtifactDir(root, dir string) (*artifactDir, error) {
-	target, kind, err := guide.TargetForLayoutDir(dir)
-	if err != nil {
-		return nil, err
-	}
 	abs := filepath.Join(root, filepath.FromSlash(dir))
 	raw, err := os.ReadFile(filepath.Join(abs, "layout.toml")) // #nosec G304 -- reads the layout.toml of a discovered artifact dir
 	if err != nil {
@@ -40,6 +36,10 @@ func loadArtifactDir(root, dir string) (*artifactDir, error) {
 	lay, err := layout.Parse(raw)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", dir, err)
+	}
+	target, kind, err := guide.TargetForLayoutDir(dir, lay.Target)
+	if err != nil {
+		return nil, err
 	}
 	ad := &artifactDir{dir: dir, abs: abs, target: target, kind: kind, lay: lay}
 	if err := ad.validateFiles(); err != nil {

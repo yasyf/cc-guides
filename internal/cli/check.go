@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/spf13/cobra"
 
@@ -23,6 +24,15 @@ var errLockStale = errors.New("lock out of date — run cc-guides render")
 // errNoLock is an artifact dir with no entry in the repo lock file — check has
 // nothing to pin against, so the repo must render first.
 var errNoLock = errors.New("no cc-guides.lock entry — run 'cc-guides render'")
+
+// dirResult is one artifact dir's load outcome: the loaded dir, or the error that
+// replaced it. check reports a load failure as that dir's row and carries on, so a
+// repo with several dirs in flight surfaces every one of them per invocation.
+type dirResult struct {
+	dir string
+	ad  *artifactDir
+	err error
+}
 
 type checkOpts struct {
 	diff    bool
@@ -65,7 +75,15 @@ func runCheck(ctx context.Context, cmd *cobra.Command, args []string, o checkOpt
 		foutln(stderr, "cc-guides: no artifact dirs found")
 		return nil
 	}
-	if err := preflightTargets(dirs); err != nil {
+	// Load here rather than through render's preflight: a dir that fails to load is
+	// one row of the report, not the end of the run, so N broken dirs surface in one
+	// invocation. The target gate still sees the whole batch before any row prints.
+	loaded := make([]dirResult, 0, len(dirs))
+	for _, dir := range dirs {
+		ad, lerr := loadArtifactDir(root, dir)
+		loaded = append(loaded, dirResult{dir: dir, ad: ad, err: lerr})
+	}
+	if err := conflictingTargets(resolved(loaded)); err != nil {
 		return exit(2, err)
 	}
 
@@ -80,9 +98,19 @@ func runCheck(ctx context.Context, cmd *cobra.Command, args []string, o checkOpt
 			worst = code
 		}
 	}
-	for _, dir := range dirs {
-		status, path, invalid, cerr := checkV3Dir(ctx, root, dir, overrides, lock, o.diff, stderr)
-		record(out, stderr, dir, status, path, invalid, cerr, bump)
+	for _, r := range loaded {
+		if r.err != nil {
+			// A load error already leads with its dir; record's label would repeat it.
+			fout(stderr, "cc-guides: %v\n", r.err)
+			bump(2)
+			continue
+		}
+		status, path, invalid, cerr := checkV3Dir(ctx, root, r.ad, overrides, lock, o.diff, stderr)
+		record(out, stderr, r.dir, status, path, invalid, cerr, bump)
+	}
+	for _, target := range orphanedTargets(lock, resolved(loaded)) {
+		fout(out, "ORPHANED\t%s\n", target)
+		bump(1)
 	}
 	if worst == 0 {
 		return nil
@@ -90,7 +118,42 @@ func runCheck(ctx context.Context, cmd *cobra.Command, args []string, o checkOpt
 	return silent(worst)
 }
 
-// record emits one row (or an invalid-input diagnostic) and updates the worst code.
+// orphanedTargets returns the lock's artifacts that no artifact dir renders, sorted.
+// The lock and the tree must agree: a target with nothing left to render it is an
+// artifact cc-guides still claims but can no longer reproduce — a renamed dir whose
+// `target` key was never added, or a hand-edited lock. Reporting it is what keeps
+// check from certifying that state OK, which it did while it only ever walked dirs.
+func orphanedTargets(lock *lockfile.Lock, ads []*artifactDir) []string {
+	if lock == nil {
+		return nil
+	}
+	rendered := make(map[string]bool, len(ads))
+	for _, ad := range ads {
+		rendered[ad.target] = true
+	}
+	var orphaned []string
+	for _, target := range lock.Artifacts {
+		if !rendered[target] {
+			orphaned = append(orphaned, target)
+		}
+	}
+	sort.Strings(orphaned)
+	return orphaned
+}
+
+// resolved returns the dirs that loaded, the batch the target gate can judge.
+func resolved(results []dirResult) []*artifactDir {
+	ads := make([]*artifactDir, 0, len(results))
+	for _, r := range results {
+		if r.err == nil {
+			ads = append(ads, r.ad)
+		}
+	}
+	return ads
+}
+
+// record emits one row (or an invalid-input diagnostic naming the artifact dir that
+// produced it) and updates the worst code.
 func record(out, stderr io.Writer, label, status, path string, invalid bool, err error, bump func(int)) {
 	if invalid {
 		fout(stderr, "cc-guides: %s: %v\n", label, err)
@@ -107,11 +170,7 @@ func record(out, stderr io.Writer, label, status, path string, invalid bool, err
 // is the only pinning mechanism: a target the lock records is checked against its
 // recorded commits; a target absent from the lock is invalid input (the repo must
 // render to create the lock entry).
-func checkV3Dir(ctx context.Context, root, dir string, overrides map[string]string, lock *lockfile.Lock, diff bool, stderr io.Writer) (status, path string, invalid bool, err error) {
-	ad, err := loadArtifactDir(root, dir)
-	if err != nil {
-		return "", dir, true, err
-	}
+func checkV3Dir(ctx context.Context, root string, ad *artifactDir, overrides map[string]string, lock *lockfile.Lock, diff bool, stderr io.Writer) (status, path string, invalid bool, err error) {
 	abs := filepath.Join(root, filepath.FromSlash(ad.target))
 	disk, err := os.ReadFile(abs) // #nosec G304 -- reads the artifact target of a discovered dir
 	if err != nil {

@@ -10,9 +10,10 @@ import (
 
 func TestTargetForLayoutDir(t *testing.T) {
 	cases := []struct {
-		dir     string
-		want    string
-		wantErr bool
+		dir      string
+		override string
+		want     string
+		wantErr  bool
 	}{
 		{dir: ".claude/fragments/AGENTS.md", want: "AGENTS.md"},
 		{dir: ".claude/fragments/plugin/scripts/install-binary.sh", want: "plugin/scripts/install-binary.sh"},
@@ -26,21 +27,76 @@ func TestTargetForLayoutDir(t *testing.T) {
 		{dir: ".claude/fragments/notes.txt", wantErr: true},                                       // unsupported extension
 		{dir: ".claude/fragments/../../etc/passwd.md", wantErr: true},                             // escapes via ..
 		{dir: ".claude/fragments/.claude/fragments/x.md", wantErr: true},                          // lands back under the root
+
+		// An override renders the dir to a path other than its own, so a dir named
+		// gitignore/ need not shadow the file every tool reads.
+		{dir: ".claude/fragments/gitignore", override: ".gitignore", want: ".gitignore"},
+		{dir: ".claude/fragments/mcp-json", override: ".mcp.json", want: ".mcp.json"},
+		{dir: ".claude/fragments/docs/gitignore", override: "docs/.gitignore", want: "docs/.gitignore"},
+		// The dir guard still runs on the dir, not the override.
+		{dir: "gitignore", override: ".gitignore", wantErr: true},
+		// Every target guard runs on the override exactly as on a path-derived target.
+		{dir: ".claude/fragments/gitignore", override: "../../etc/passwd.md", wantErr: true},
+		{dir: ".claude/fragments/gitignore", override: "docs/../../passwd.md", wantErr: true},
+		{dir: ".claude/fragments/gitignore", override: "/etc/passwd.md", wantErr: true},
+		{dir: ".claude/fragments/gitignore", override: ".claude/fragments/x.md", wantErr: true},
+		{dir: ".claude/fragments/gitignore", override: "notes.txt", wantErr: true},
+		// An unsupported dir extension is rescued by a supported override, and a
+		// supported dir extension is not rescued by an unsupported one.
+		{dir: ".claude/fragments/notes.txt", override: "notes.md", want: "notes.md"},
+		{dir: ".claude/fragments/AGENTS.md", override: "AGENTX.txt", wantErr: true},
+		// A control character would reach the lock and write TOML that cannot be
+		// parsed back, so it is refused at the guard, not at the serializer.
+		{dir: ".claude/fragments/gitignore", override: "ok.md\n[sources.evil]\nspec = \"x\"\nnote.md", wantErr: true},
+		{dir: ".claude/fragments/gitignore", override: "a\tb.md", wantErr: true},
+		{dir: ".claude/fragments/gitignore", override: "a\x00b.md", wantErr: true},
+		// A backslash is not a separator on any platform cc-guides ships for.
+		{dir: ".claude/fragments/gitignore", override: `..\etc\passwd.md`, wantErr: true},
 	}
 	for _, tc := range cases {
-		got, _, err := guide.TargetForLayoutDir(tc.dir)
+		got, _, err := guide.TargetForLayoutDir(tc.dir, tc.override)
 		if tc.wantErr {
 			if err == nil {
-				t.Errorf("TargetForLayoutDir(%q) = %q, want error", tc.dir, got)
+				t.Errorf("TargetForLayoutDir(%q, %q) = %q, want error", tc.dir, tc.override, got)
 			}
 			continue
 		}
 		if err != nil {
-			t.Errorf("TargetForLayoutDir(%q) error: %v", tc.dir, err)
+			t.Errorf("TargetForLayoutDir(%q, %q) error: %v", tc.dir, tc.override, err)
 			continue
 		}
 		if got != tc.want {
-			t.Errorf("TargetForLayoutDir(%q) = %q, want %q", tc.dir, got, tc.want)
+			t.Errorf("TargetForLayoutDir(%q, %q) = %q, want %q", tc.dir, tc.override, got, tc.want)
+		}
+	}
+}
+
+// A target naming a directory rather than a file must be turned back by the escape
+// guard. `..` once reached the extension check and was refused only because
+// filepath.Ext("..") is "." — an accident that reported a misleading error and would
+// have vanished had "." ever become a registered kind.
+func TestTargetDirectoryFormsHitTheEscapeGuard(t *testing.T) {
+	for _, override := range []string{"..", ".", "../", "./"} {
+		_, _, err := guide.TargetForLayoutDir(".claude/fragments/gitignore", override)
+		if err == nil {
+			t.Fatalf("override %q must be refused", override)
+		}
+		if !strings.Contains(err.Error(), "unsafe target") {
+			t.Fatalf("override %q must fail the escape guard, got: %v", override, err)
+		}
+		if errors.Is(err, guide.ErrUnknownExt) {
+			t.Fatalf("override %q must not be refused by the extension check: %v", override, err)
+		}
+	}
+}
+
+// A control character or backslash in a target is refused with its own sentinel, so
+// the diagnostic says what is wrong rather than blaming the extension.
+func TestTargetCharsetSentinel(t *testing.T) {
+	for _, override := range []string{"a\nb.md", "a\x1fb.md", `a\b.md`} {
+		_, _, err := guide.TargetForLayoutDir(".claude/fragments/gitignore", override)
+		if !errors.Is(err, guide.ErrUnsafeTargetChar) {
+			t.Fatalf("override %q error = %v, want ErrUnsafeTargetChar", override, err)
 		}
 	}
 }
@@ -87,7 +143,7 @@ func TestExtensionDiagnostics(t *testing.T) {
 	}
 
 	dir := ".claude/fragments/notes.txt"
-	_, _, err := guide.TargetForLayoutDir(dir)
+	_, _, err := guide.TargetForLayoutDir(dir, "")
 	if err == nil {
 		t.Fatal("TargetForLayoutDir() succeeded, want error")
 	}

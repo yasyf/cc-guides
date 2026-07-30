@@ -5,10 +5,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/yasyf/cc-guides/internal/cli"
+	"github.com/yasyf/cc-guides/lockfile"
 )
 
 func exec(args ...string) (code int, stdout, stderr string) {
@@ -717,6 +719,42 @@ func TestCheckPartialLockPerArtifact(t *testing.T) {
 	}
 }
 
+// check is a diagnostic, so every unloadable artifact dir surfaces in ONE run: the
+// first must not abort the rest, or fixing N broken dirs would cost N invocations.
+// A healthy sibling still reports its own row alongside them.
+func TestCheckReportsEveryUnloadableDir(t *testing.T) {
+	repo(t)
+	// Two different load failures, plus a dir that renders and locks cleanly.
+	write(t, ".claude/fragments/AGENTS.md/layout.toml", "fragments = [\"intro\"]\n")
+	write(t, ".claude/fragments/AGENTS.md/intro.fragment.md", "# Repo\n")
+	if code, _, errout := exec("render"); code != 0 {
+		t.Fatalf("render: code=%d err=%s", code, errout)
+	}
+	write(t, ".claude/fragments/CLAUDE.md/layout.toml", "fragments = [\"intro\"]\n")
+	write(t, ".claude/fragments/CLAUDE.md/intro.fragment.md", "# C\n")
+	write(t, ".claude/fragments/CLAUDE.md/stray.txt", "junk\n")
+	write(t, ".claude/fragments/notes.yml/layout.toml", "fragments = [\"missing\"]\n")
+
+	code, out, errout := exec("check")
+	if code != 2 {
+		t.Fatalf("check: code=%d out=%q err=%q, want 2", code, out, errout)
+	}
+	// Whole lines, so the format is pinned too: a load error names its dir exactly
+	// once (the error already leads with it — a second label would read
+	// "cc-guides: <dir>: <dir>: …").
+	for _, want := range []string{
+		"cc-guides: .claude/fragments/CLAUDE.md: stray file \"stray.txt\" (an artifact dir holds only layout.toml and *.fragment.md files)\n",
+		"cc-guides: .claude/fragments/notes.yml: layout.toml references local fragment file(s) that do not exist: missing.fragment.yml\n",
+	} {
+		if !strings.Contains(errout, want) {
+			t.Fatalf("both load failures must surface in one run, each naming its dir once, missing %q:\n%s", want, errout)
+		}
+	}
+	if out != "OK\tAGENTS.md\n" {
+		t.Fatalf("a healthy sibling must still report its row, got %q", out)
+	}
+}
+
 // The lock detects a spec that no longer matches the layout and demands a re-render.
 func TestCheckStaleLock(t *testing.T) {
 	repo(t)
@@ -732,9 +770,11 @@ func TestCheckStaleLock(t *testing.T) {
 	}
 }
 
-// A full render is authoritative: removing a layout dir and re-rendering rebuilds
-// the lock so the removed target is pruned, which restores clobber-safety at that
-// path (a later layout there cannot overwrite the leftover file without --force).
+// A full render is authoritative: removing a layout dir and re-rendering under
+// --prune rebuilds the lock so the removed target is pruned, which restores
+// clobber-safety at that path (a later layout there cannot overwrite the leftover
+// file without --force). --prune is what makes dropping it deliberate; the bare
+// re-render refuses first, which TestRenderRefusesToDropLockedArtifact pins.
 func TestFullRenderRebuildsLockPruningRemovedTarget(t *testing.T) {
 	repo(t)
 	write(t, ".claude/fragments/.claude/settings.json/layout.toml", "fragments = [\"base\"]\n")
@@ -752,7 +792,7 @@ func TestFullRenderRebuildsLockPruningRemovedTarget(t *testing.T) {
 	if err := os.RemoveAll(".claude/fragments/extra.json"); err != nil {
 		t.Fatal(err)
 	}
-	if code, _, errout := exec("render"); code != 0 {
+	if code, _, errout := exec("render", "--prune"); code != 0 {
 		t.Fatalf("re-render: code=%d err=%s", code, errout)
 	}
 	lock2, _ := os.ReadFile(".claude/fragments/cc-guides.lock")
@@ -765,6 +805,210 @@ func TestFullRenderRebuildsLockPruningRemovedTarget(t *testing.T) {
 	write(t, ".claude/fragments/extra.json/base.fragment.json", "{\n  \"n\": 2\n}\n")
 	if code, _, errout := exec("render"); code != 2 || !strings.Contains(errout, "handwritten") {
 		t.Fatalf("clobber-safety must be restored after prune: code=%d err=%q", code, errout)
+	}
+}
+
+// Renaming an artifact dir without adding the matching `target` key silently
+// orphaned the real artifact: the rename rendered a NEW target, the rebuilt lock
+// forgot the old one, and render exited 0. For a markerless kind (json) lock
+// membership was the only record that the file was managed, so nothing could
+// detect it afterwards. A full render now refuses, and the correct move — adding
+// the `target` key — renders the original artifact from the renamed dir.
+func TestRenderRefusesToDropLockedArtifact(t *testing.T) {
+	repo(t)
+	write(t, ".claude/fragments/.mcp.json/layout.toml", "fragments = [\"base\"]\n")
+	write(t, ".claude/fragments/.mcp.json/base.fragment.json", "{\n  \"mcpServers\": {}\n}\n")
+	if code, _, errout := exec("render"); code != 0 {
+		t.Fatalf("baseline render: code=%d err=%s", code, errout)
+	}
+
+	// The migration move, with the `target` key forgotten.
+	if err := os.Rename(".claude/fragments/.mcp.json", ".claude/fragments/mcp.json"); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errout := exec("render")
+	if code != 2 || !strings.Contains(errout, "refusing to stop managing an artifact still on disk: .mcp.json") {
+		t.Fatalf("renamed dir must refuse: code=%d err=%q", code, errout)
+	}
+	// Nothing moved: the lock still owns the real artifact and no wrong path exists.
+	lock, _ := os.ReadFile(".claude/fragments/cc-guides.lock")
+	if !strings.Contains(string(lock), `artifacts = [".mcp.json"]`) {
+		t.Fatalf("a refused render must leave the lock intact:\n%s", lock)
+	}
+	if _, err := os.Stat("mcp.json"); !os.IsNotExist(err) {
+		t.Fatal("a refused render must not write the wrong target")
+	}
+	// --dry-run reports the same refusal rather than a clean plan.
+	if code, _, errout := exec("render", "--dry-run"); code != 2 || !strings.Contains(errout, "refusing to stop managing") {
+		t.Fatalf("dry-run must surface the hazard: code=%d err=%q", code, errout)
+	}
+	// check must not certify the state either: the lock claims a target nothing renders.
+	if code, out, _ := exec("check"); code != 1 || !strings.Contains(out, "ORPHANED\t.mcp.json\n") {
+		t.Fatalf("check must report the orphan: code=%d out=%q", code, out)
+	}
+
+	// The correct move: the renamed dir names its target explicitly.
+	write(t, ".claude/fragments/mcp.json/layout.toml", "target = \".mcp.json\"\n\nfragments = [\"base\"]\n")
+	if code, _, errout := exec("render"); code != 0 {
+		t.Fatalf("target key must fix it: code=%d err=%s", code, errout)
+	}
+	if code, out, _ := exec("check"); code != 0 || out != "OK\t.mcp.json\n" {
+		t.Fatalf("after the fix: code=%d out=%q", code, out)
+	}
+	if _, err := os.Stat("mcp.json"); !os.IsNotExist(err) {
+		t.Fatal("the wrong target must never exist")
+	}
+}
+
+// A drop whose artifact is already gone from disk orphans nothing, so it needs no
+// --prune: deleting the dir and its rendered file together is a complete removal.
+func TestRenderDropWithFileGoneNeedsNoPrune(t *testing.T) {
+	repo(t)
+	write(t, ".claude/fragments/AGENTS.md/layout.toml", "fragments = [\"intro\"]\n")
+	write(t, ".claude/fragments/AGENTS.md/intro.fragment.md", "# Repo\n")
+	write(t, ".claude/fragments/extra.json/layout.toml", "fragments = [\"base\"]\n")
+	write(t, ".claude/fragments/extra.json/base.fragment.json", "{\n  \"n\": 1\n}\n")
+	if code, _, errout := exec("render"); code != 0 {
+		t.Fatalf("baseline render: code=%d err=%s", code, errout)
+	}
+	if err := os.RemoveAll(".claude/fragments/extra.json"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove("extra.json"); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, errout := exec("render"); code != 0 {
+		t.Fatalf("a complete removal must not need --prune: code=%d err=%s", code, errout)
+	}
+	lock, _ := os.ReadFile(".claude/fragments/cc-guides.lock")
+	if strings.Contains(string(lock), "extra.json") {
+		t.Fatalf("the removed target must leave the lock:\n%s", lock)
+	}
+}
+
+// A scoped render merges into the lock and prunes nothing, so it cannot drop a
+// target and the guard must not fire on one.
+func TestScopedRenderSkipsDropGuard(t *testing.T) {
+	repo(t)
+	write(t, ".claude/fragments/AGENTS.md/layout.toml", "fragments = [\"intro\"]\n")
+	write(t, ".claude/fragments/AGENTS.md/intro.fragment.md", "# Repo\n")
+	write(t, ".claude/fragments/extra.json/layout.toml", "fragments = [\"base\"]\n")
+	write(t, ".claude/fragments/extra.json/base.fragment.json", "{\n  \"n\": 1\n}\n")
+	if code, _, errout := exec("render"); code != 0 {
+		t.Fatalf("baseline render: code=%d err=%s", code, errout)
+	}
+	// Rendering only one dir leaves the other's target out of this run's batch.
+	if code, _, errout := exec("render", ".claude/fragments/AGENTS.md"); code != 0 {
+		t.Fatalf("scoped render must not trip the drop guard: code=%d err=%s", code, errout)
+	}
+	lock, _ := os.ReadFile(".claude/fragments/cc-guides.lock")
+	if !strings.Contains(string(lock), "extra.json") {
+		t.Fatalf("scoped render must preserve the untouched target:\n%s", lock)
+	}
+}
+
+// A `target` carrying a raw newline once rendered at exit 0 and wrote a lock with a
+// newline inside a TOML basic string, after which every render and check died with
+// "strings cannot contain newlines" until someone repaired the lock by hand. The
+// render must refuse, and — belt and braces at the serialization boundary — a lock
+// written from such a value must still parse.
+func TestTargetWithControlCharRefusedAndLockStaysParseable(t *testing.T) {
+	repo(t)
+	target := "ok.md\n[sources.evil]\nspec = \"pwned\"\nnote.md"
+	write(t, ".claude/fragments/evil/layout.toml", "target = "+strconv.Quote(target)+"\n\nfragments = [\"base\"]\n")
+	write(t, ".claude/fragments/evil/base.fragment.md", "# body\n")
+
+	code, _, errout := exec("render")
+	if code != 2 || !strings.Contains(errout, "unsafe target") {
+		t.Fatalf("a control character in a target must be refused: code=%d err=%q", code, errout)
+	}
+	if _, err := os.Stat(lockfile.Path); !os.IsNotExist(err) {
+		t.Fatal("a refused render must write no lock")
+	}
+
+	// The serializer must be safe on its own, so a value reaching it by any other
+	// route still writes a lock that reads back.
+	enc := (&lockfile.Lock{Schema: 1, Version: "1.2.3", Artifacts: []string{target}}).Encode()
+	back, err := lockfile.Parse(enc)
+	if err != nil {
+		t.Fatalf("a lock holding %q must parse back, got %v:\n%s", target, err, enc)
+	}
+	if len(back.Artifacts) != 1 || back.Artifacts[0] != target {
+		t.Fatalf("round-trip lost the artifact: %#v", back.Artifacts)
+	}
+}
+
+// pr-check answers "did this PR touch a file it must not", which the lock alone
+// decides; the dirs only sharpen the message. A broken artifact dir the PR never
+// touched must not fail it — that would let one WIP dir on trunk block every
+// unrelated PR across the fleet.
+func TestPRCheckToleratesUnrelatedBrokenDir(t *testing.T) {
+	dir := gitRepo(t)
+	write(t, ".claude/fragments/AGENTS.md/layout.toml", "fragments = [\"intro\"]\n")
+	write(t, ".claude/fragments/AGENTS.md/intro.fragment.md", "# Repo\n")
+	write(t, "AGENTS.md", "# Repo\n")
+	write(t, lockfile.Path, prCheckBaseLock)
+	// An unrelated dir that cannot load: a stray file makes loadArtifactDir fail.
+	write(t, ".claude/fragments/wip.md/layout.toml", "fragments = [\"x\"]\n")
+	write(t, ".claude/fragments/wip.md/x.fragment.md", "# wip\n")
+	write(t, ".claude/fragments/wip.md/stray.txt", "junk\n")
+	runGitT(t, dir, "add", "-A")
+	runGitT(t, dir, "commit", "-q", "-m", "base")
+	base := runGitT(t, dir, "rev-parse", "HEAD")
+
+	write(t, "README_PR.md", "# unrelated\n")
+	runGitT(t, dir, "add", "-A")
+	runGitT(t, dir, "commit", "-q", "-m", "pr")
+
+	code, stdout, stderr := exec("pr-check", base)
+	if code != 0 || stdout != "cc-guides: no CI-owned artifact was hand-edited\n" {
+		t.Fatalf("an unrelated broken dir must not fail a clean PR: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+// Two dirs claiming one target is a repo-wide misconfiguration render and check both
+// refuse; pr-check refuses it too rather than silently picking whichever dir the map
+// happened to write last.
+func TestPRCheckRefusesCollidingTargets(t *testing.T) {
+	dir := gitRepo(t)
+	write(t, ".claude/fragments/AGENTS.md/layout.toml", "fragments = [\"intro\"]\n")
+	write(t, ".claude/fragments/AGENTS.md/intro.fragment.md", "# Repo\n")
+	write(t, "AGENTS.md", "# Repo\n")
+	write(t, lockfile.Path, prCheckBaseLock)
+	write(t, ".claude/fragments/agents/layout.toml", "target = \"AGENTS.md\"\n\nfragments = [\"intro\"]\n")
+	write(t, ".claude/fragments/agents/intro.fragment.md", "# Other\n")
+	runGitT(t, dir, "add", "-A")
+	runGitT(t, dir, "commit", "-q", "-m", "base")
+	base := runGitT(t, dir, "rev-parse", "HEAD")
+	write(t, "README_PR.md", "# unrelated\n")
+	runGitT(t, dir, "add", "-A")
+	runGitT(t, dir, "commit", "-q", "-m", "pr")
+
+	code, _, stderr := exec("pr-check", base)
+	if code != 2 || !strings.Contains(stderr, "is shared by") {
+		t.Fatalf("colliding targets must refuse: code=%d stderr=%q", code, stderr)
+	}
+}
+
+// Targets differing only by case are one file on the case-insensitive filesystem the
+// fleet authors on and two on the case-sensitive one CI renders on. Refusing in both
+// places keeps a repo's render portable, and the message names each target since the
+// dirs alone would read as two identical strings colliding.
+func TestRenderRefusesCaseFoldedTargetCollision(t *testing.T) {
+	repo(t)
+	write(t, ".claude/fragments/notes.md/layout.toml", "fragments = [\"base\"]\n")
+	write(t, ".claude/fragments/notes.md/base.fragment.md", "# a\n")
+	write(t, ".claude/fragments/upper/layout.toml", "target = \"NOTES.md\"\n\nfragments = [\"base\"]\n")
+	write(t, ".claude/fragments/upper/base.fragment.md", "# b\n")
+
+	code, _, errout := exec("render")
+	if code != 2 || !strings.Contains(errout, "is shared by") {
+		t.Fatalf("case-folded collision must refuse: code=%d err=%q", code, errout)
+	}
+	for _, want := range []string{"NOTES.md (.claude/fragments/upper)", "notes.md (.claude/fragments/notes.md)"} {
+		if !strings.Contains(errout, want) {
+			t.Fatalf("message must name each target, missing %q:\n%s", want, errout)
+		}
 	}
 }
 
@@ -783,6 +1027,27 @@ func TestRenderUnreadableTargetErrorsBeforeLock(t *testing.T) {
 	}
 	if _, err := os.Stat(".claude/fragments/cc-guides.lock"); !os.IsNotExist(err) {
 		t.Fatal("a preflight failure must not write the lock (which would register the target)")
+	}
+}
+
+// Two dirs whose effective targets collide — one path-derived, one from a `target`
+// override — are refused in the preflight, before any artifact or lock is written.
+func TestRenderTargetCollisionRefusedBeforeWrite(t *testing.T) {
+	repo(t)
+	write(t, ".claude/fragments/.gitignore/layout.toml", "fragments = [\"base\"]\n")
+	write(t, ".claude/fragments/.gitignore/base.fragment.gitignore", "node_modules/\n")
+	write(t, ".claude/fragments/gitignore/layout.toml", "target = \".gitignore\"\n\nfragments = [\"logs\"]\n")
+	write(t, ".claude/fragments/gitignore/logs.fragment.gitignore", "*.log\n")
+
+	code, _, errout := exec("render")
+	if code != 2 || !strings.Contains(errout, `target ".gitignore" is shared by`) {
+		t.Fatalf("colliding targets: code=%d err=%q", code, errout)
+	}
+	if _, err := os.Stat(".gitignore"); !os.IsNotExist(err) {
+		t.Fatal("a refused batch must write no artifact")
+	}
+	if _, err := os.Stat(".claude/fragments/cc-guides.lock"); !os.IsNotExist(err) {
+		t.Fatal("a refused batch must write no lock")
 	}
 }
 

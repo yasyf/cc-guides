@@ -32,9 +32,19 @@ var (
 	// ErrUnknownExt is an unsupported artifact/fragment extension.
 	ErrUnknownExt = errors.New("unsupported extension")
 
+	// ErrUnsafeTargetChar is a `target` override holding a character an artifact path
+	// may not carry — a control character (which would write an unparseable lock) or
+	// a backslash.
+	ErrUnsafeTargetChar = errors.New("unsafe character in target")
+
 	// ErrHandwrittenOverwrite is a render refusing to clobber a handwritten file
 	// cc-guides does not manage (no marker, not in the lock).
 	ErrHandwrittenOverwrite = errors.New("refusing to overwrite a handwritten file cc-guides does not manage")
+
+	// ErrDroppedArtifact is a full render refusing to stop managing an artifact the
+	// lock records whose file is still on disk — the shape a renamed artifact dir
+	// takes when its `target` key was never added.
+	ErrDroppedArtifact = errors.New("refusing to stop managing an artifact still on disk")
 
 	// ErrJSONParse is a JSON fragment that is not well-formed or carries trailing data.
 	ErrJSONParse = errors.New("invalid JSON fragment")

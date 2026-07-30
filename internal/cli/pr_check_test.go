@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"context"
+	"os"
 	osexec "os/exec"
 	"strings"
 	"testing"
@@ -108,6 +109,35 @@ func TestPRCheck(t *testing.T) {
 				t.Fatalf("pr-check: code=%d stdout=%q stderr=%q; want code=%d stdout=%q", code, stdout, stderr, tt.wantCode, tt.wantStdout)
 			}
 		})
+	}
+}
+
+// Under a `target` override the dir no longer mirrors the target, and the lock
+// records targets alone — so the violation must name the real dir on disk, not the
+// path the target would imply.
+func TestPRCheckNamesOverrideDir(t *testing.T) {
+	dir := gitRepo(t)
+	write(t, ".claude/fragments/gitignore/layout.toml", "target = \".gitignore\"\n\nfragments = [\"base\"]\n")
+	write(t, ".claude/fragments/gitignore/base.fragment.gitignore", "node_modules/\n")
+	if code, _, errout := exec("render"); code != 0 {
+		t.Fatalf("render: code=%d err=%s", code, errout)
+	}
+	runGitT(t, dir, "add", "-A")
+	runGitT(t, dir, "commit", "-q", "-m", "base")
+	base := runGitT(t, dir, "rev-parse", "HEAD")
+
+	disk, err := os.ReadFile(".gitignore")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, ".gitignore", string(disk)+"*.tmp\n")
+	runGitT(t, dir, "add", "-A")
+	runGitT(t, dir, "commit", "-q", "-m", "pr")
+
+	want := ".gitignore is CI-owned (rendered by cc-guides) — edit .claude/fragments/gitignore/ instead\n"
+	code, stdout, stderr := exec("pr-check", base)
+	if code != 1 || stdout != want {
+		t.Fatalf("pr-check: code=%d stdout=%q stderr=%q; want code=1 stdout=%q", code, stdout, stderr, want)
 	}
 }
 

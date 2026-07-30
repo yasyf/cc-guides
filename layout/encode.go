@@ -3,15 +3,23 @@ package layout
 import (
 	"sort"
 	"strings"
+
+	"github.com/yasyf/cc-guides/internal/tomlstr"
 )
 
-// Encode renders a Layout to canonical layout.toml bytes: the top-level
-// `fragments` array first (so TOML keeps it top-level), then one
-// `[sources.<alias>]` table per declared source, alias-sorted. Every source is
-// emitted — there is no baked-in default to omit — so a repo's layout.toml
-// self-describes exactly which pack each import resolves against.
+// Encode renders a Layout to canonical layout.toml bytes: a `target` override when
+// one is set and the top-level `fragments` array, both before any table header (so
+// TOML keeps them top-level), then one `[sources.<alias>]` table per declared
+// source, alias-sorted. Every source is emitted — there is no baked-in default to
+// omit — so a repo's layout.toml self-describes exactly which pack each import
+// resolves against.
 func Encode(l *Layout) []byte {
 	var b strings.Builder
+	if l.Target != "" {
+		b.WriteString("target = ")
+		b.WriteString(quote(l.Target))
+		b.WriteString("\n\n")
+	}
 	b.WriteString("fragments = [\n")
 	for _, e := range l.Entries {
 		b.WriteString("  ")
@@ -68,9 +76,10 @@ func sortedKeys(m map[string]string) []string {
 	return keys
 }
 
-// quote wraps a value in a TOML basic string. Every value that reaches here is a
-// spec, alias:name ref, or an argument value already constrained to a quote-free,
-// backslash-free character set, so a plain double-quote wrap is exact.
-func quote(s string) string {
-	return `"` + s + `"`
-}
+// quote wraps a value in a TOML basic string. Only some of what reaches it is
+// validated: fragment names and source aliases by guide.ValidName, argument keys and
+// values by guide.ValidArgKey and guide.ValidArgValue. A source spec is not — Parse
+// checks only that it is non-empty — and a target is arbitrary until
+// TargetForLayoutDir judges it. The escaper is what covers the difference, so it
+// escapes unconditionally instead of trusting any caller's character set.
+func quote(s string) string { return tomlstr.Quote(s) }

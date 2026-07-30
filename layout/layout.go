@@ -3,7 +3,8 @@
 // fragments and imports of shared fragments from another repo. The schema mirrors
 // capt-hook's packs.toml idiom: a single ordered, heterogeneous `fragments` array
 // (string shorthand or `{ use, args }` inline tables) plus optional
-// `[sources.<alias>]` tables.
+// `[sources.<alias>]` tables and an optional `target` key that renders the dir to a
+// path other than its own — so a dir named `gitignore/` can render `.gitignore`.
 //
 // Unknown keys are a hard error, never a silent empty render: a typo'd key must
 // fail loudly. Every imported alias must be declared by a `[sources.<alias>]`
@@ -66,11 +67,13 @@ func (e Entry) Ref() string {
 
 // Layout is a parsed, validated layout.toml.
 type Layout struct {
+	Target  string            // optional target override; "" renders the dir's own path
 	Sources map[string]string // alias -> spec string
 	Entries []Entry
 }
 
 type rawLayout struct {
+	Target    string               `toml:"target"`
 	Sources   map[string]rawSource `toml:"sources"`
 	Fragments []toml.Primitive     `toml:"fragments"`
 }
@@ -97,7 +100,7 @@ func Parse(data []byte) (*Layout, error) {
 		return nil, fmt.Errorf("layout.toml: %w", err)
 	}
 
-	lay := &Layout{Sources: map[string]string{}}
+	lay := &Layout{Target: raw.Target, Sources: map[string]string{}}
 	for alias, s := range raw.Sources {
 		if !guide.ValidName(alias) {
 			return nil, fmt.Errorf("%w: source alias %q", ErrBadName, alias)

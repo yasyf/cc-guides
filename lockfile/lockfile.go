@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/yasyf/cc-guides/internal/tomlstr"
 )
 
 // Path is the repo-relative location of the lock file.
@@ -158,10 +160,8 @@ func Merge(existing, fresh *Lock) *Lock {
 	return out
 }
 
-// quote wraps a value in a TOML basic string, escaping the two characters that
-// could break it. Lock values are specs, shas, versions, and slash paths.
-func quote(s string) string {
-	s = strings.ReplaceAll(s, "\\", "\\\\")
-	s = strings.ReplaceAll(s, "\"", "\\\"")
-	return "\"" + s + "\""
-}
+// quote wraps a lock value in a TOML basic string. It escapes control characters as
+// well as the backslash and double quote, so no value can write a lock that cannot
+// be read back — not an artifact path, and not a source spec, which nothing upstream
+// validates beyond rejecting the empty string.
+func quote(s string) string { return tomlstr.Quote(s) }

@@ -46,6 +46,50 @@ func TestRenderCheckGitignore(t *testing.T) {
 	}
 }
 
+// A `target` key detaches the artifact from the dir's path: a dir named gitignore/
+// renders .gitignore, so a repo need not carry a directory shadowing the file its
+// tools read. The marker still names the real dir, and check round-trips.
+func TestRenderCheckGitignoreTargetOverride(t *testing.T) {
+	repo(t)
+	target := ".gitignore"
+	dir := ".claude/fragments/gitignore"
+	write(t, dir+"/layout.toml", "target = \".gitignore\"\n\nfragments = [\"base\", \"logs\"]\n")
+	write(t, dir+"/base.fragment.gitignore", "# build output\nnode_modules/\n")
+	write(t, dir+"/logs.fragment.gitignore", "*.log\n")
+
+	if code, _, errout := exec("render"); code != 0 {
+		t.Fatalf("target-override render exit=%d: %s", code, errout)
+	}
+	disk, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(disk)
+	if firstLine(s) != shMarker(dir) {
+		t.Fatalf("marker must name the real dir: %q", firstLine(s))
+	}
+	want := "# build output\nnode_modules/\n\n*.log\n"
+	if !strings.HasSuffix(s, want) {
+		t.Fatalf("body:\n%s", s)
+	}
+	// The dir's own path is no longer a target, so nothing is written there.
+	if _, err := os.Stat("gitignore"); !os.IsNotExist(err) {
+		t.Fatalf("an overridden dir must not also render its own path: %v", err)
+	}
+	lock, _ := os.ReadFile(".claude/fragments/cc-guides.lock")
+	if !strings.Contains(string(lock), `artifacts = [".gitignore"]`) {
+		t.Fatalf("lock must register the overridden target:\n%s", lock)
+	}
+	if code, out, errout := exec("check"); code != 0 || out != "OK\t"+target+"\n" {
+		t.Fatalf("target-override check: code=%d out=%q err=%s", code, out, errout)
+	}
+	// A byte change to the managed artifact (marker preserved) is STALE.
+	write(t, target, s+"*.tmp\n")
+	if code, out, _ := exec("check"); code != 1 || out != "STALE\t"+target+"\n" {
+		t.Fatalf("target-override tamper: code=%d out=%q", code, out)
+	}
+}
+
 // A nested gitignore target (docs/.gitignore) discovers, renders, and checks the same
 // way — filepath.Ext(".gitignore") is the whole dotfile name, so dispatch is unchanged
 // under a subdir.

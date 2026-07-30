@@ -90,6 +90,65 @@ func TestParseErrors(t *testing.T) {
 	}
 }
 
+// The optional `target` key parses; its absence leaves the override empty, so the
+// dir's own path still decides the artifact.
+func TestParseTarget(t *testing.T) {
+	cases := []struct {
+		name string
+		toml string
+		want string
+	}{
+		{"absent", "fragments = [\"base\"]\n", ""},
+		{"set", "target = \".gitignore\"\n\nfragments = [\"base\"]\n", ".gitignore"},
+		{"set above a sources table", "target = \".mcp.json\"\n\nfragments = [\"team:x\"]\n\n[sources.team]\nsource = \"github:acme/guides//g@v1\"\n", ".mcp.json"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lay, err := layout.Parse([]byte(tc.toml))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if lay.Target != tc.want {
+				t.Fatalf("target = %q, want %q", lay.Target, tc.want)
+			}
+		})
+	}
+}
+
+// `target` is the only new key: any other unknown top-level key still hard-errors.
+func TestParseTargetDoesNotLoosenUnknownKeys(t *testing.T) {
+	toml := "target = \".gitignore\"\ntargets = \".gitignore\"\n\nfragments = [\"base\"]\n"
+	if _, err := layout.Parse([]byte(toml)); !errors.Is(err, layout.ErrUnknownKey) {
+		t.Fatalf("err = %v, want ErrUnknownKey", err)
+	}
+}
+
+// A target survives the round-trip, and Encode keeps it above every table header so
+// the re-parse still sees a top-level key.
+func TestEncodeTargetRoundTrip(t *testing.T) {
+	toml := "target = \".gitignore\"\n\nfragments = [\"team:x\"]\n\n[sources.team]\nsource = \"github:acme/guides//g@v1\"\n"
+	lay, err := layout.Parse([]byte(toml))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := layout.Encode(lay)
+	back, err := layout.Parse(encoded)
+	if err != nil {
+		t.Fatalf("re-parse: %v\n%s", err, encoded)
+	}
+	if back.Target != ".gitignore" {
+		t.Fatalf("round-trip target = %q, want %q:\n%s", back.Target, ".gitignore", encoded)
+	}
+	// An override-free layout emits no target key at all.
+	plain, err := layout.Parse([]byte("fragments = [\"base\"]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(layout.Encode(plain)); containsStr(got, "target") {
+		t.Fatalf("override-free layout must emit no target key:\n%s", got)
+	}
+}
+
 func TestParseCustomSource(t *testing.T) {
 	toml := "fragments = [\"team:x\"]\n\n[sources.team]\nsource = \"github:acme/guides//g@v1\"\n"
 	lay, err := layout.Parse([]byte(toml))

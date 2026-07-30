@@ -133,9 +133,22 @@ Commit the lock alongside the artifacts and add the Guides shim; from then on CI
 
 ## Composition
 
-An artifact dir is any directory under `.claude/fragments/` that holds a `layout.toml`, and its path below that root is the target it renders. `.claude/fragments/AGENTS.md/` renders `AGENTS.md`; a nested path renders a nested target. The kind — Markdown, shell comment style, JSON, YAML, TOML, or gitignore — comes from the target extension. A JSON target deep-merges its pieces (arrays concatenate, objects merge) and carries no marker; the lock is its only drift record. A YAML target concatenates its pieces like Markdown (never a semantic merge, so load-bearing comments survive), carries a `#`-comment marker, and re-validates the composed document at render. A TOML target concatenates the same way — fragments are disjoint table sets, so comments and the marker survive — with one authoring rule: every fragment after the first must open with a table header, so a stray root-level key can't silently land inside the previous fragment's last table. The composed output re-validates at render, catching a slip like the same table defined in two fragments before it ever reaches a consumer. TOML lint tolerates `{{token}}` placeholders by neutralizing each distinct token to a distinct numeric literal; a token inside a typed scalar (a date like `2026-{{month}}-01`) still neutralizes to a malformed value and gets flagged — context-free substitution cannot satisfy every typed position. A gitignore target concatenates its pattern fragments the same way and carries the same `#`-comment marker; it has no syntax to validate, so any pattern — a `{{token}}`-bearing one included — passes lint.
+An artifact dir is any directory under `.claude/fragments/` that holds a `layout.toml`, and its path below that root is the target it renders. `.claude/fragments/AGENTS.md/` renders `AGENTS.md`; a nested path renders a nested target. An optional `target` key names the artifact instead, which frees a repo from carrying a directory that shadows a file its tools read. `.claude/fragments/gitignore/` with `target = ".gitignore"` renders the root `.gitignore`, and the tree holds only the fragment dir:
 
-`layout.toml` is an ordered, heterogeneous `fragments` array. The array comes first, before any `[sources.*]` table: a top-level key written after a table header nests inside that table, and the binary hard-errors on that shape instead of composing empty.
+```toml
+target = ".gitignore"
+
+fragments = [
+  "cc-skills:gitignore-base",
+  "gitignore-local",
+]
+```
+
+Renaming an existing artifact dir means adding the `target` key in the same move, and a full render enforces that. Renaming `.claude/fragments/.mcp.json/` to `.claude/fragments/mcp.json/` without the key would render `mcp.json` and orphan the real `.mcp.json`; the render refuses, because a locked artifact whose file is still on disk may not lose its dir. Removing an artifact for good is the same gesture minus the rename — delete its dir and its rendered file together, or keep the file and pass `--prune`.
+
+The guards hold either way: a target stays inside the repo, carries a supported extension, and never lands back under `.claude/fragments/`. A target two artifact dirs share, an override colliding with another dir's path included, is refused in the preflight before anything is written. The generated marker and `pr-check` both name the dir that rendered the file, which under an override differs from the target's own path. The kind — Markdown, shell comment style, JSON, YAML, TOML, or gitignore — comes from the target extension. A JSON target deep-merges its pieces (arrays concatenate, objects merge) and carries no marker; the lock is its only drift record. A YAML target concatenates its pieces like Markdown (never a semantic merge, so load-bearing comments survive), carries a `#`-comment marker, and re-validates the composed document at render. A TOML target concatenates the same way — fragments are disjoint table sets, so comments and the marker survive — with one authoring rule: every fragment after the first must open with a table header, so a stray root-level key can't silently land inside the previous fragment's last table. The composed output re-validates at render, catching a slip like the same table defined in two fragments before it ever reaches a consumer. TOML lint tolerates `{{token}}` placeholders by neutralizing each distinct token to a distinct numeric literal; a token inside a typed scalar (a date like `2026-{{month}}-01`) still neutralizes to a malformed value and gets flagged — context-free substitution cannot satisfy every typed position. A gitignore target concatenates its pattern fragments the same way and carries the same `#`-comment marker; it has no syntax to validate, so any pattern — a `{{token}}`-bearing one included — passes lint.
+
+`layout.toml` is an ordered, heterogeneous `fragments` array, optionally preceded by a `target` override. Both are top-level keys and come before any `[sources.*]` table: a top-level key written after a table header nests inside that table, and the binary hard-errors on that shape instead of composing empty.
 
 ```toml
 fragments = [
@@ -156,10 +169,10 @@ One invocation per surface; run `cc-guides <command> --help` for the full flag l
 
 | Command | What it does |
 |---|---|
-| `render [paths…]` | Compose each artifact dir to its target and write the lock. No paths: discover every layout under the repo. |
-| `check [paths…]` | Re-compose in memory, pinned to the lock's commits, and byte-compare. TSV `OK`/`STALE`/`MISSING`; exit 1 on drift, 2 on invalid input. |
+| `render [paths…]` | Compose each artifact dir to its target and write the lock. No paths: discover every layout under the repo. A full render refuses to drop a locked artifact whose file is still on disk; `--prune` allows it. |
+| `check [paths…]` | Re-compose in memory, pinned to the lock's commits, and byte-compare. TSV `OK`/`STALE`/`MISSING`, plus `ORPHANED` for a locked target no dir renders; exit 1 on drift, 2 on invalid input. |
 | `ci-render` | Render everything, skip a lock diff that only moved source pins, otherwise commit `chore: re-render guides (…)` and push, retrying a rejected push. The render job's engine. |
-| `pr-check <base>` | Exit 1 when `<base>...HEAD` touches a lock-listed artifact or the lock itself, naming the fragment dir to edit instead; a repo with no lock owns nothing and passes. |
+| `pr-check <base>` | Exit 1 when `<base>...HEAD` touches a lock-listed artifact or the lock itself, naming the artifact dir that renders it — the real dir, `target` override included; a repo with no lock owns nothing and passes. |
 | `lint <dir>` | Check a shared-guides directory for purity: LF, one trailing newline, kind, shell shebang. |
 | `list` | List each artifact dir and the fragments it composes. |
 | `cat <ref>` | Print a fragment body: an `alias:name` import or a local piece by name. |
