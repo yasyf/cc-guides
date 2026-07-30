@@ -323,24 +323,31 @@ func preflightTargets(root string, dirs []string) ([]*artifactDir, error) {
 	return ads, nil
 }
 
-// sharedBy names the dirs of one collision, sorted. Dirs whose targets differ only
-// by case carry their target too, since naming the dirs alone would read as a claim
-// that two identical strings collided.
-func sharedBy(sharing []*artifactDir) []string {
+// collisionMessage describes one target claimed by several dirs. A case-only
+// collision carries both its targets and its reason: naming the dirs alone would read
+// as two identical strings colliding, and on the case-sensitive filesystem CI renders
+// on the layout genuinely works, so the refusal looks like a bug until the message
+// says the artifacts differ per platform.
+func collisionMessage(sharing []*artifactDir) string {
 	distinct := map[string]bool{}
 	for _, ad := range sharing {
 		distinct[ad.target] = true
 	}
+	caseOnly := len(distinct) > 1
 	entries := make([]string, 0, len(sharing))
 	for _, ad := range sharing {
-		if len(distinct) > 1 {
+		if caseOnly {
 			entries = append(entries, fmt.Sprintf("%s (%s)", ad.target, ad.dir))
 			continue
 		}
 		entries = append(entries, ad.dir)
 	}
 	sort.Strings(entries)
-	return entries
+	msg := fmt.Sprintf("target %q is shared by %s", sharing[0].target, strings.Join(entries, ", "))
+	if caseOnly {
+		msg += " (differing only by case: one file where authoring happens, two where CI renders)"
+	}
+	return msg
 }
 
 // droppedTargets refuses a full render that would silently stop managing an
@@ -407,7 +414,7 @@ func conflictingTargets(ads []*artifactDir) error {
 		if len(sharing) < 2 {
 			continue
 		}
-		msgs = append(msgs, fmt.Sprintf("target %q is shared by %s", sharing[0].target, strings.Join(sharedBy(sharing), ", ")))
+		msgs = append(msgs, collisionMessage(sharing))
 	}
 	if len(msgs) == 0 {
 		return nil

@@ -60,10 +60,18 @@ func unsafeTarget(rel string) bool {
 		strings.HasPrefix(rel, "../")
 }
 
-// targetCharset rejects the characters an artifact path may not hold. A control
-// character reaching the lock writes TOML that cannot be parsed back, bricking every
-// later render and check; a backslash is not a separator on any platform cc-guides
-// ships for, so a target carrying one is a Windows path someone wrote by mistake.
+// targetCharset rejects two characters that have no place in a real filename: a C0
+// control or DEL, and a backslash, which is not a separator on any platform cc-guides
+// ships for and so marks a Windows path someone wrote by mistake. It refuses them
+// here, where the diagnostic can name the layout dir, rather than letting them fail
+// somewhere downstream.
+//
+// This is deliberately not a completeness check, and nothing should be built on it as
+// one. A bare double quote, a C1 control, and a bidi override all pass and reach the
+// lock; what keeps the lock parseable is tomlstr.Quote, which escapes every value
+// unconditionally and is verified over every rune. Widening this guard to cover those
+// would duplicate a guarantee the serializer already makes, leaving two things to keep
+// in sync instead of one.
 func targetCharset(rel string) error {
 	for _, r := range rel {
 		if r < 0x20 || r == 0x7f {

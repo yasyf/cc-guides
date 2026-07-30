@@ -1005,10 +1005,34 @@ func TestRenderRefusesCaseFoldedTargetCollision(t *testing.T) {
 	if code != 2 || !strings.Contains(errout, "is shared by") {
 		t.Fatalf("case-folded collision must refuse: code=%d err=%q", code, errout)
 	}
-	for _, want := range []string{"NOTES.md (.claude/fragments/upper)", "notes.md (.claude/fragments/notes.md)"} {
+	for _, want := range []string{
+		"NOTES.md (.claude/fragments/upper)",
+		"notes.md (.claude/fragments/notes.md)",
+		// Without the reason, a reader on case-sensitive Linux — where this layout
+		// genuinely works — reads the refusal as a tool bug.
+		"differing only by case: one file where authoring happens, two where CI renders",
+	} {
 		if !strings.Contains(errout, want) {
-			t.Fatalf("message must name each target, missing %q:\n%s", want, errout)
+			t.Fatalf("message must name each target and the reason, missing %q:\n%s", want, errout)
 		}
+	}
+}
+
+// A same-case collision is the ordinary kind: it names the dirs and stays silent about
+// case, which would only be noise.
+func TestRenderSameCaseCollisionOmitsCaseReason(t *testing.T) {
+	repo(t)
+	write(t, ".claude/fragments/notes.md/layout.toml", "fragments = [\"base\"]\n")
+	write(t, ".claude/fragments/notes.md/base.fragment.md", "# a\n")
+	write(t, ".claude/fragments/other/layout.toml", "target = \"notes.md\"\n\nfragments = [\"base\"]\n")
+	write(t, ".claude/fragments/other/base.fragment.md", "# b\n")
+
+	code, _, errout := exec("render")
+	if code != 2 || !strings.Contains(errout, `target "notes.md" is shared by .claude/fragments/notes.md, .claude/fragments/other`) {
+		t.Fatalf("same-case collision: code=%d err=%q", code, errout)
+	}
+	if strings.Contains(errout, "differing only by case") {
+		t.Fatalf("a same-case collision must not blame case:\n%s", errout)
 	}
 }
 
