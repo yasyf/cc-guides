@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // fullShaRe matches a full 40-char hex commit sha. Only a full sha is used
@@ -63,6 +64,9 @@ func ParseSpec(spec string) (Spec, error) {
 			if s.Ref == "" {
 				return Spec{}, fmt.Errorf("%w: %q has an empty ref after `@`", ErrBadSpec, spec)
 			}
+			if err := validRef(s.Ref); err != nil {
+				return Spec{}, fmt.Errorf("%w: %q: %w", ErrBadSpec, spec, err)
+			}
 		} else {
 			s.Path = pathRef
 		}
@@ -83,12 +87,42 @@ func ParseSpec(spec string) (Spec, error) {
 		if ref == "" {
 			return Spec{}, fmt.Errorf("%w: %q has an empty ref after `@`", ErrBadSpec, spec)
 		}
+		if err := validRef(ref); err != nil {
+			return Spec{}, fmt.Errorf("%w: %q: %w", ErrBadSpec, spec, err)
+		}
 	}
 	owner, repo, ok := strings.Cut(ownerRepo, "/")
 	if !ok || !ownerRepoRe.MatchString(owner) || !ownerRepoRe.MatchString(repo) {
 		return Spec{}, fmt.Errorf("%w: %q has a malformed or unsafe <owner>/<repo>", ErrBadSpec, spec)
 	}
 	return Spec{Owner: owner, Repo: repo, Ref: ref, Manifest: true, Raw: spec}, nil
+}
+
+// validRef rejects a ref that could read as an option on the git command line, or
+// that no legitimate ref carries. It is deliberately not a reimplementation of
+// `git check-ref-format`: real refs routinely hold `/`, `.`, `-`, and `_`
+// (`feature/foo`, `v1.0.0`, `release-2.1`), so a charset strict enough to feel safe
+// would reject specs people actually write, which is worse than what it guards.
+//
+// A leading `-` is inert today — `git ls-remote` stops recognizing options after its
+// first positional, so such a ref is a pattern matching nothing — but that safety is
+// a property of git's parser across versions and transports, stated nowhere in this
+// code. This states it here instead. It also completes the field set: ParseSpec
+// validates owner, repo, and path, and a fourth field left unchecked is the one a
+// later audit does not think to look at.
+func validRef(ref string) error {
+	if strings.HasPrefix(ref, "-") {
+		return fmt.Errorf("ref %q may not begin with `-` (it would read as a git option)", ref)
+	}
+	for _, r := range ref {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("ref %q may not contain a control character (%q)", ref, r)
+		}
+		if unicode.IsSpace(r) {
+			return fmt.Errorf("ref %q may not contain whitespace (%q)", ref, r)
+		}
+	}
+	return nil
 }
 
 // verbatimSha reports whether the spec's ref is a hex sha usable without a

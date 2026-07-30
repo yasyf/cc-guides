@@ -187,6 +187,50 @@ func TestEncodeRoundTrip(t *testing.T) {
 	}
 }
 
+// A table header and a bare argument key are written raw — quote cannot help there —
+// so Encode crashes on one it cannot write safely rather than emitting TOML nothing
+// can read. Parse gates both (ValidName, ValidArgKey), so reaching either panic means
+// the Layout was built by hand. lockfile.Encode refuses identically; leaving these two
+// silent would read as a considered decision that the same mistake is fine here.
+func TestEncodePanicsOnRawIdentifiers(t *testing.T) {
+	tests := []struct {
+		name string
+		lay  *layout.Layout
+	}{
+		{"source alias", &layout.Layout{
+			Sources: map[string]string{"evil\nalias": "github:acme/x"},
+			Entries: []layout.Entry{{Alias: "evil\nalias", Name: "frag"}},
+		}},
+		{"argument key", &layout.Layout{
+			Entries: []layout.Entry{{
+				Name: "frag",
+				Args: map[string]string{"ev\nil": "v"},
+				Keys: []string{"ev\nil"},
+			}},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("Encode must panic on an identifier it cannot write safely")
+				}
+			}()
+			_ = layout.Encode(tt.lay)
+		})
+	}
+}
+
+// Parse gates both identifiers, so the panics above are unreachable from a file.
+func TestParseGatesRawIdentifiers(t *testing.T) {
+	if _, err := layout.Parse([]byte("fragments = [\"a\"]\n\n[sources.\"evil\\nalias\"]\nsource = \"x\"\n")); !errors.Is(err, layout.ErrBadName) {
+		t.Fatalf("alias err = %v, want ErrBadName", err)
+	}
+	if _, err := layout.Parse([]byte("fragments = [ { use = \"x\", args = { \"ev\\nil\" = \"v\" } } ]\n")); !errors.Is(err, layout.ErrBadArg) {
+		t.Fatalf("arg key err = %v, want ErrBadArg", err)
+	}
+}
+
 // A custom [sources.*] table survives the round-trip.
 func TestEncodeCustomSourceRoundTrip(t *testing.T) {
 	toml := "fragments = [\"team:x\"]\n\n[sources.team]\nsource = \"github:acme/guides//g@v1\"\n"

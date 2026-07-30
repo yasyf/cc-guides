@@ -1,9 +1,11 @@
 package layout
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
+	"github.com/yasyf/cc-guides/guide"
 	"github.com/yasyf/cc-guides/internal/tomlstr"
 )
 
@@ -34,6 +36,13 @@ func Encode(l *Layout) []byte {
 	}
 	sort.Strings(aliases)
 	for _, alias := range aliases {
+		// A table header cannot go through quote, so an alias is written raw. Parse
+		// gates it on ValidName, which makes an invalid one here a Layout built by
+		// hand — impossible state, crashed on rather than emitted as broken TOML.
+		// lockfile.Encode refuses the same way for the same reason.
+		if !guide.ValidName(alias) {
+			panic(fmt.Sprintf("layout: source alias %q is invalid; Parse rejects these, so this Layout was constructed by hand", alias))
+		}
 		b.WriteString("\n[sources.")
 		b.WriteString(alias)
 		b.WriteString("]\nsource = ")
@@ -58,6 +67,11 @@ func encodeEntry(e Entry) string {
 	for i, k := range keys {
 		if i > 0 {
 			b.WriteString(", ")
+		}
+		// A bare key is written raw for the same reason a table header is, and Parse
+		// gates it on ValidArgKey.
+		if !guide.ValidArgKey(k) {
+			panic(fmt.Sprintf("layout: argument key %q is invalid; Parse rejects these, so this Entry was constructed by hand", k))
 		}
 		b.WriteString(k)
 		b.WriteString(" = ")

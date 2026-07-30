@@ -5,6 +5,54 @@ import (
 	"testing"
 )
 
+// ParseSpec validated owner, repo, and path and left Ref unconstrained. A leading `-`
+// is inert today only because `git ls-remote` stops recognizing options after its
+// first positional — a property of git's parser, across versions and transports, that
+// this code never stated. Three of four fields validated is also the shape that makes
+// the fourth invisible to the next audit, so Ref is now checked too. The line is
+// deliberately narrow: refs legitimately carry `/`, `.`, `-`, and `_`, and a charset
+// strict enough to feel safe would reject specs people actually write.
+func TestParseSpecRefCharset(t *testing.T) {
+	rejected := []string{
+		"github:acme/repo@-upload-pack=/tmp/x.sh",
+		"github:acme/repo//g@-upload-pack=/tmp/x.sh",
+		"github:acme/repo@--exec=/tmp/x.sh",
+		"github:acme/repo@main branch",
+		"github:acme/repo@main\ttab",
+		"github:acme/repo@main\nnewline",
+	}
+	for _, spec := range rejected {
+		t.Run("reject "+spec, func(t *testing.T) {
+			if _, err := ParseSpec(spec); !errors.Is(err, ErrBadSpec) {
+				t.Fatalf("ParseSpec(%q) err = %v, want ErrBadSpec", spec, err)
+			}
+		})
+	}
+
+	// The refs people actually write must keep parsing — a guard that breaks these is
+	// worse than the one it replaces.
+	accepted := []struct{ spec, ref string }{
+		{"github:acme/repo@feature/foo", "feature/foo"},
+		{"github:acme/repo@v1.0.0", "v1.0.0"},
+		{"github:acme/repo@release-2.1", "release-2.1"},
+		{"github:acme/repo@user_branch", "user_branch"},
+		{"github:acme/repo@release@2026", "release@2026"},
+		{"github:acme/repo//guides@feature/foo", "feature/foo"},
+		{"github:acme/repo//guides@v1.0.0", "v1.0.0"},
+	}
+	for _, tc := range accepted {
+		t.Run("accept "+tc.spec, func(t *testing.T) {
+			s, err := ParseSpec(tc.spec)
+			if err != nil {
+				t.Fatalf("ParseSpec(%q) rejected a legitimate ref: %v", tc.spec, err)
+			}
+			if s.Ref != tc.ref {
+				t.Fatalf("ParseSpec(%q).Ref = %q, want %q", tc.spec, s.Ref, tc.ref)
+			}
+		})
+	}
+}
+
 func TestParseSpec(t *testing.T) {
 	cases := []struct {
 		in       string
