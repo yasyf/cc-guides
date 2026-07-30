@@ -34,6 +34,13 @@ var ownerRepoRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 // (github:<owner>/<repo>[@<ref>], no `//`, Manifest true — the resolver follows
 // the target repo's cc-guides.toml). Ref is "" for the default branch; Path is ""
 // for the repo root or a manifest spec.
+//
+// ParseSpec is the only thing that builds one in non-test code, and downstream
+// relies on that: Path reaches cache-path construction, where sanitizeSubpath
+// escapes the separators but NOT a literal "..", so Path being "..-free" is
+// ParseSpec's check and nothing else's. A second constructor takes on that check
+// too — this is written down because the alias bug was exactly this shape, one
+// parser's rule assumed to cover a second reader that never applied it.
 type Spec struct {
 	Owner    string
 	Repo     string

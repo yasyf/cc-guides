@@ -373,7 +373,10 @@ func sha12(sha string) string {
 }
 
 // sanitizeSubpath turns a slash subpath into one safe path segment; "" becomes
-// the sentinel "%root". The encoding is injective — the escape char is escaped
+// the sentinel "%root". It escapes '%', '/', and '\' — deliberately not a literal
+// "..", which would collapse the cache dir one level: see Spec, whose Path is
+// ..-free because ParseSpec gates it and is the only non-test constructor.
+// The encoding is injective — the escape char is escaped
 // first, then the separators — so two distinct subpaths (e.g. "a/b" and "a_b")
 // never collapse to the same cache key. The empty-path sentinel is provably
 // outside the escaper's image: every '%' the escaper emits is immediately
