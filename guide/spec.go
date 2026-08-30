@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"unsafe"
@@ -243,12 +244,18 @@ func mdTokenFree(body []byte) error {
 	return nil
 }
 
-// shShebang rejects a shell fragment that does not open with a #!/bin/sh shebang.
+// shShebangs are the interpreters a shell fragment may name. The body is POSIX
+// either way; bash is accepted because endpoint-security agents deep-inspect every
+// exec of /bin/sh, costing seconds per invocation on a hot hook path.
+var shShebangs = []string{"#!/bin/sh", "#!/bin/bash"}
+
+// shShebang rejects a shell fragment whose first line is not an accepted shebang.
 func shShebang(body []byte) error {
-	if !strings.HasPrefix(string(body), "#!/bin/sh\n") {
-		return errors.New("shell fragment must start with a #!/bin/sh shebang")
+	line, _, ok := strings.Cut(string(body), "\n")
+	if ok && slices.Contains(shShebangs, line) {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("shell fragment must start with a %s shebang", strings.Join(shShebangs, " or "))
 }
 
 // shNoMustache rejects a shell fragment carrying leftover mustache block markers.

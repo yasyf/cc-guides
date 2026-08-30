@@ -239,6 +239,37 @@ func TestSHLintMustacheTokens(t *testing.T) {
 	}
 }
 
+// The sh fragment shebang is an allowlist, not one literal: /bin/sh and /bin/bash
+// both declare a POSIX body, and anything else — a missing shebang, another
+// interpreter, an env indirection, a shebang with arguments — still fails.
+func TestSHLintShebangAllowlist(t *testing.T) {
+	tests := []struct {
+		name  string
+		body  string
+		clean bool
+	}{
+		{"sh", "#!/bin/sh\necho hi\n", true},
+		{"bash", "#!/bin/bash\necho hi\n", true},
+		{"none", "echo hi\n", false},
+		{"junk", "#!nonsense\necho hi\n", false},
+		{"env bash", "#!/usr/bin/env bash\necho hi\n", false},
+		{"zsh", "#!/bin/zsh\necho hi\n", false},
+		{"sh with args", "#!/bin/sh -e\necho hi\n", false},
+		{"not first line", "echo hi\n#!/bin/sh\n", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vs := guide.KindSH.Lint([]byte(tt.body))
+			if tt.clean && len(vs) != 0 {
+				t.Fatalf("%q must lint clean, got %v", tt.body, vs)
+			}
+			if !tt.clean && len(vs) == 0 {
+				t.Fatalf("%q must fail sh lint", tt.body)
+			}
+		})
+	}
+}
+
 // {{token}} placeholders are tolerated by the toml validators (neutralized to a
 // scalar), in a value or a whole-scalar position — a real substitution runs at
 // compose time — while genuinely malformed TOML still fails.
