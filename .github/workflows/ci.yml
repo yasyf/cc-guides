@@ -77,4 +77,4 @@ jobs:
         with:
           python-version: "3.13"
       - name: pack test (validate layout + run inline hook tests)
-        run: uvx --isolated --python 3.13 "capt-hook>=12.72.0" pack test plugin
+        run: uvx --isolated --python 3.13 "capt-hook>=12.74.0" pack test plugin
