@@ -17,6 +17,7 @@ func TestGuidesWorkflowRequiresExactCommit(t *testing.T) {
 		"workflow_dispatch:\n    inputs:\n      commit:",
 		"description: Exact commit to render and verify\n        required: true",
 		"ref: ${{ inputs.commit || github.sha }}",
+		"ref: ${{ inputs.commit || github.event.pull_request.head.sha }}",
 	} {
 		if !strings.Contains(workflow, required) {
 			t.Errorf("guides workflow missing %q", required)
@@ -25,7 +26,10 @@ func TestGuidesWorkflowRequiresExactCommit(t *testing.T) {
 	if got := strings.Count(workflow, "uses: actions/checkout@v7"); got != 2 {
 		t.Fatalf("checkout steps = %d, want 2", got)
 	}
-	if got := strings.Count(workflow, "ref: ${{ inputs.commit || github.sha }}"); got != 2 {
-		t.Fatalf("exact checkout refs = %d, want 2", got)
+	if got := strings.Count(workflow, "ref: ${{ inputs.commit || github.sha }}"); got != 1 {
+		t.Fatalf("exact render checkout refs = %d, want 1", got)
+	}
+	if got := strings.Count(workflow, "ref: ${{ inputs.commit || github.event.pull_request.head.sha }}"); got != 1 {
+		t.Fatalf("exact PR checkout refs = %d, want 1", got)
 	}
 }
