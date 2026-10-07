@@ -77,6 +77,10 @@ jobs:
         with:
           version: latest
 
+      # Not base.sha: the payload snapshots it, so after a stacked PR's base is
+      # retargeted it can name a commit no fetched ref reaches, even on rerun.
       - name: Verify no CI-owned artifact was hand-edited
         shell: bash
-        run: cc-guides pr-check "${{ github.event.pull_request.base.sha }}"
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: cc-guides pr-check "origin/$BASE_REF"
