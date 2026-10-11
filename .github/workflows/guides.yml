@@ -36,7 +36,7 @@ jobs:
     permissions:
       contents: write
     concurrency:
-      group: cc-guides-render
+      group: cc-guides-render${{ github.event_name == 'workflow_dispatch' && format('-{0}', inputs.commit || github.sha) || '' }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
