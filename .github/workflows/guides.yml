@@ -11,6 +11,11 @@ on:
         description: Exact caller commit to render and verify
         required: false
         type: string
+      parallel_commits:
+        description: Render an explicit commit independently
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
   pull_request:
@@ -36,7 +41,7 @@ jobs:
     permissions:
       contents: write
     concurrency:
-      group: cc-guides-render${{ github.event_name == 'workflow_dispatch' && format('-{0}', inputs.commit || github.sha) || '' }}
+      group: cc-guides-render${{ (github.event_name == 'workflow_dispatch' || inputs.parallel_commits) && format('-{0}', inputs.commit || github.sha) || '' }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
