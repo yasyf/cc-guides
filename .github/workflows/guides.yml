@@ -32,9 +32,6 @@ on:
 
 # Routing keys off github.event_name, which in a workflow_call run is the
 # CALLER's event — identical in both modes.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   # CI is the sole writer of rendered artifacts: install latest, ci-render, then
   # deploy-key push so the commit retriggers downstream (the Guides run no-ops).
