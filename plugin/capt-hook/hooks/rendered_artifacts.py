@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -15,6 +16,14 @@ from captain_hook import (
     Tool,
     on,
 )
+
+CI_RENDER = re.compile(r"yasyf/cc-guides/\.github/workflows/guides\.yml@|cc-guides pr-check")
+
+
+def ci_renders(root: Path) -> bool:
+    return (workflow := root / ".github" / "workflows" / "guides.yml").is_file() and bool(
+        CI_RENDER.search(workflow.read_text(encoding="utf-8", errors="replace"))
+    )
 
 
 def lock_root(start: Path) -> Path | None:
@@ -91,7 +100,19 @@ class RenderedArtifact(CustomCondition):
             cwd=str(Path(__file__).parent / "tests/fixtures/managed"),
             file=str(Path(__file__).parent / "tests/fixtures/managed/AGENTS.md"),
             content="hand edit",
-        ): Block(pattern=r"`AGENTS\.md` is cc-guides-rendered\. Edit the fragments under `\.claude/fragments/AGENTS\.md/`"),
+        ): Block(
+            pattern=r"`AGENTS\.md` is cc-guides-rendered\. Edit the fragments under `\.claude/fragments/AGENTS\.md/`, "
+            r"then run `cc-guides render`\."
+        ),
+        Input(
+            tool="Edit",
+            cwd=str(Path(__file__).parent / "tests/fixtures/ci-rendered"),
+            file=str(Path(__file__).parent / "tests/fixtures/ci-rendered/AGENTS.md"),
+            content="hand edit",
+        ): Block(
+            pattern=r"`AGENTS\.md` is cc-guides-rendered\. Edit the fragments under `\.claude/fragments/AGENTS\.md/` "
+            r"and commit only the fragments"
+        ),
         Input(
             tool="Write",
             cwd=str(Path(__file__).parent / "tests/fixtures/managed"),
@@ -200,13 +221,16 @@ class RenderedArtifact(CustomCondition):
 )
 def block_rendered_artifact_edit(evt: PreToolUseEvent) -> HookResult:
     root, artifact = matched_artifact(evt)
+    then = (
+        " and commit only the fragments, since `.github/workflows/guides.yml` renders the artifact and lock in CI."
+        if ci_renders(root)
+        else ", then run `cc-guides render`."
+    )
     match fragment_dirs(root, artifact) or (artifact,):
         case (only,):
-            return evt.block(
-                f"`{artifact}` is cc-guides-rendered. Edit the fragments under `.claude/fragments/{only}/`, then run `cc-guides render`."
-            )
+            return evt.block(f"`{artifact}` is cc-guides-rendered. Edit the fragments under `.claude/fragments/{only}/`{then}")
         case claimants:
             return evt.block(
                 f"`{artifact}` is cc-guides-rendered, and {len(claimants)} fragment dirs claim it as their `target`. "
-                "Remove the duplicate under `.claude/fragments/`, then run `cc-guides render`."
+                f"Remove the duplicate under `.claude/fragments/`{then}"
             )
