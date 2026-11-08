@@ -79,7 +79,14 @@ jobs:
           fetch-depth: 0
 
       - name: Install latest cc-guides
+        if: github.repository != 'yasyf/cc-guides'
         uses: yasyf/cc-guides/install@main
+        with:
+          version: latest
+
+      - name: Install latest cc-guides with this PR's install action
+        if: github.repository == 'yasyf/cc-guides'
+        uses: ./install
         with:
           version: latest
 
